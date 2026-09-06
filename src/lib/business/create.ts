@@ -9,6 +9,28 @@ import { DEFAULT_THEME_TOKENS, mergeTokens, ThemeTokensSchema, type ThemeTokens 
 import type { IndustryFieldSeed, IndustryPricingSeed, IndustryServiceSeed, IndustryStageSeed } from "@/lib/catalog/industries";
 import type { SectionSeed } from "@/lib/blocks/schema";
 import { defaultForms, defaultNavigation, defaultSystemPages, type BusinessSeedInfo, type FormFieldSeed } from "./defaults";
+import { createInviteToken } from "@/lib/auth/service";
+import { sendMail } from "@/lib/mail";
+import { env } from "@/lib/env";
+
+/** Service seed accepted by the wizard/import: the industry shape plus per-service toggles. */
+export interface ServiceSeedInput extends Omit<IndustryServiceSeed, "children"> {
+  isEnabled?: boolean;
+  ctaLabel?: string;
+  icon?: string;
+  children?: ServiceSeedInput[];
+}
+
+export const PricingItemSeedSchema = z.object({
+  key: z.string().min(1).max(60),
+  label: z.string().min(1).max(120),
+  type: z.enum(["RATE", "FEE", "MULTIPLIER", "PERCENT"]).default("RATE"),
+  amount: z.number().finite(),
+  unit: z.string().max(40).optional(),
+  category: z.string().max(60).optional(),
+  description: z.string().max(400).optional(),
+});
+export type PricingItemSeed = z.infer<typeof PricingItemSeedSchema>;
 
 /**
  * THE business generation engine.
@@ -55,11 +77,25 @@ export const CreateBusinessInput = z.object({
   /** Initial service areas: suburbs/cities as plain names. */
   serviceAreas: z.array(z.object({ name: z.string(), type: z.enum(["COUNTRY", "STATE", "REGION", "CITY", "SUBURB", "POSTCODE"]).default("SUBURB"), postcode: z.string().optional(), state: z.string().optional(), isPrimary: z.boolean().optional() })).optional(),
   /** Override industry default services entirely (e.g. from the wizard). */
-  services: z.array(z.custom<IndustryServiceSeed>()).optional(),
+  services: z.array(z.custom<ServiceSeedInput>()).optional(),
+  /** Override industry pricing fields entirely (e.g. from the wizard). */
+  pricingItems: z.array(PricingItemSeedSchema).optional(),
   ownerUserId: z.string().uuid().optional(),
+  /**
+   * Invite a business owner by email. An existing user becomes an ACTIVE
+   * owner; a new user is created with status INVITED, an INVITED membership
+   * and an invitation email. Ignored when ownerUserId is given.
+   */
+  ownerInvite: z.object({ email: z.string().email(), name: z.string().min(1).max(120) }).optional(),
   createdByUserId: z.string().uuid().nullable().optional(),
   /** Skip the default page generation (used by duplicate/import which copy pages explicitly). */
   skipWebsiteGeneration: z.boolean().optional(),
+  /**
+   * Skip every industry-derived content seed (services, workflow, custom
+   * fields, pricing, forms, automations). Duplicate/import insert their own
+   * copies of these afterwards. Implies skipWebsiteGeneration.
+   */
+  skipContentGeneration: z.boolean().optional(),
 });
 export type CreateBusinessInput = z.input<typeof CreateBusinessInput>;
 export type CreateBusinessParsed = z.output<typeof CreateBusinessInput>;
@@ -125,28 +161,52 @@ export async function createBusiness(rawInput: CreateBusinessInput): Promise<Bus
   const baseTokens: ThemeTokens = designFamily ? mergeTokens(DEFAULT_THEME_TOKENS, asObject<Partial<ThemeTokens>>(designFamily.tokens)) : DEFAULT_THEME_TOKENS;
   const themeTokens = mergeTokens(baseTokens, input.themeOverrides ?? null);
 
-  const services = input.services ?? asArray<IndustryServiceSeed>(industry.defaultServices);
+  const skipContent = !!input.skipContentGeneration;
+  const skipWebsite = skipContent || !!input.skipWebsiteGeneration;
+  const services: ServiceSeedInput[] = input.services ?? asArray<IndustryServiceSeed>(industry.defaultServices);
   const stages = asArray<IndustryStageSeed>(industry.projectStages);
   const jobFields = asArray<IndustryFieldSeed>(industry.jobFields);
   const estimateFields = asArray<IndustryFieldSeed>(industry.estimateFields);
-  const pricingFields = asArray<IndustryPricingSeed>(industry.pricingFields);
+  const pricingFields: IndustryPricingSeed[] = input.pricingItems ?? asArray<IndustryPricingSeed>(industry.pricingFields);
   const leadQuestions = asArray<IndustryFieldSeed>(industry.leadQuestions);
   const websiteOverrides = asObject<Record<string, SectionSeed[]>>(industry.websiteSections);
 
   const eventIds: string[] = [];
+  let invitedOwner: { userId: string; email: string; name: string } | null = null;
 
   const business = await withPlatformTransaction(async (tx) => {
+    // ── Owner (existing user, or invited) ─────────────────────────────────
+    let ownerUserId = input.ownerUserId ?? null;
+    let ownerMembershipStatus: "ACTIVE" | "INVITED" = "ACTIVE";
+    if (!ownerUserId && input.ownerInvite) {
+      const email = input.ownerInvite.email.trim().toLowerCase();
+      const existing = await tx.user.findUnique({ where: { email }, select: { id: true, status: true } });
+      if (existing) {
+        ownerUserId = existing.id;
+        ownerMembershipStatus = existing.status === "INVITED" ? "INVITED" : "ACTIVE";
+      } else {
+        const created = await tx.user.create({ data: { email, name: input.ownerInvite.name.trim(), status: "INVITED" } });
+        ownerUserId = created.id;
+        ownerMembershipStatus = "INVITED";
+        invitedOwner = { userId: created.id, email, name: created.name };
+      }
+    }
+    const membershipDates = ownerMembershipStatus === "ACTIVE" ? { acceptedAt: new Date() } : { invitedAt: new Date(), invitedByUserId: input.createdByUserId ?? null };
+
     // ── Organisation ──────────────────────────────────────────────────────
     let organizationId = input.organizationId;
     if (!organizationId) {
       const orgName = input.organizationName ?? input.name;
       let orgSlug = slugify(orgName) || slug;
       while (await tx.organization.findUnique({ where: { slug: orgSlug } })) orgSlug = `${orgSlug}-${Math.floor(Math.random() * 1000)}`;
-      const org = await tx.organization.create({ data: { name: orgName, slug: orgSlug, ownerUserId: input.ownerUserId ?? null } });
+      const org = await tx.organization.create({ data: { name: orgName, slug: orgSlug, ownerUserId } });
       organizationId = org.id;
-      if (input.ownerUserId) {
-        await tx.organizationMembership.create({ data: { organizationId, userId: input.ownerUserId, roleId: orgOwnerRole.id, acceptedAt: new Date() } });
+      if (ownerUserId) {
+        await tx.organizationMembership.create({ data: { organizationId, userId: ownerUserId, roleId: orgOwnerRole.id, status: ownerMembershipStatus, ...membershipDates } });
       }
+    } else {
+      const org = await tx.organization.findFirst({ where: { id: organizationId, deletedAt: null }, select: { id: true } });
+      if (!org) throw new BusinessCreationError("Organisation not found.");
     }
 
     // ── Business ──────────────────────────────────────────────────────────
@@ -183,8 +243,12 @@ export async function createBusiness(rawInput: CreateBusinessInput): Promise<Bus
     });
     const businessId = created.id;
 
-    if (input.ownerUserId) {
-      await tx.businessMembership.create({ data: { businessId, userId: input.ownerUserId, roleId: businessOwnerRole.id, acceptedAt: new Date() } });
+    if (ownerUserId) {
+      await tx.businessMembership.upsert({
+        where: { businessId_userId: { businessId, userId: ownerUserId } },
+        create: { businessId, userId: ownerUserId, roleId: businessOwnerRole.id, status: ownerMembershipStatus, ...membershipDates },
+        update: {},
+      });
     }
 
     if (input.address && (input.address.line1 || input.address.city)) {
@@ -203,7 +267,7 @@ export async function createBusiness(rawInput: CreateBusinessInput): Promise<Bus
 
     // ── Services (nested) ─────────────────────────────────────────────────
     const usedServiceSlugs = new Set<string>();
-    const createService = async (s: IndustryServiceSeed, parentId: string | null, order: number) => {
+    const createService = async (s: ServiceSeedInput, parentId: string | null, order: number) => {
       let sslug = s.slug ?? slugify(s.name);
       let i = 2;
       while (usedServiceSlugs.has(sslug)) sslug = `${s.slug ?? slugify(s.name)}-${i++}`;
@@ -221,18 +285,20 @@ export async function createBusiness(rawInput: CreateBusinessInput): Promise<Bus
           priceMaxCents: s.priceMaxCents ?? null,
           priceUnit: s.priceUnit ?? null,
           faqs: toJson(s.faqs ?? []),
-          ctaLabel: "Request a quote",
+          icon: s.icon ?? null,
+          ctaLabel: s.ctaLabel?.trim() || "Request a quote",
           ctaHref: "/quote",
           sortOrder: order,
+          isEnabled: s.isEnabled ?? true,
           isFeatured: order < 4 && !parentId,
         },
       });
       for (const [j, child] of (s.children ?? []).entries()) await createService(child, row.id, j);
     };
-    for (const [i, s] of services.entries()) await createService(s, null, i);
+    if (!skipContent) for (const [i, s] of services.entries()) await createService(s, null, i);
 
     // ── Workflow ──────────────────────────────────────────────────────────
-    await tx.workflow.create({
+    if (!skipContent) await tx.workflow.create({
       data: { businessId, key: "default", name: `${terminology.job ?? "Job"} workflow`, stages: toJson(stages.length ? stages : [{ key: "lead", name: "Lead" }, { key: "quote", name: "Quote" }, { key: "in_progress", name: "In Progress" }, { key: "completion", name: "Completion", isTerminal: true }]), isDefault: true },
     });
 
@@ -241,20 +307,20 @@ export async function createBusiness(rawInput: CreateBusinessInput): Promise<Bus
     jobFields.forEach((f, i) => fieldRows.push({ businessId, entityType: "JOB", key: f.key, label: f.label, type: fieldTypeToPrisma(f.type), options: toJson(f.options ?? []), isRequired: !!f.isRequired, helpText: f.helpText ?? null, groupName: f.groupName ?? null, showOnForms: !!f.showOnForms, sortOrder: i, validation: toJson(f.unit ? { unit: f.unit } : {}) }));
     estimateFields.forEach((f, i) => fieldRows.push({ businessId, entityType: "ESTIMATE", key: f.key, label: f.label, type: fieldTypeToPrisma(f.type), options: toJson(f.options ?? []), isRequired: !!f.isRequired, helpText: f.helpText ?? null, groupName: f.groupName ?? null, showOnForms: !!f.showOnForms, sortOrder: i, validation: toJson(f.unit ? { unit: f.unit } : {}) }));
     leadQuestions.forEach((f, i) => fieldRows.push({ businessId, entityType: "LEAD", key: f.key, label: f.label, type: fieldTypeToPrisma(f.type), options: toJson(f.options ?? []), isRequired: !!f.isRequired, helpText: f.helpText ?? null, groupName: f.groupName ?? null, showOnForms: true, sortOrder: i, validation: toJson({}) }));
-    if (fieldRows.length) await tx.customFieldDefinition.createMany({ data: fieldRows, skipDuplicates: true });
+    if (fieldRows.length && !skipContent) await tx.customFieldDefinition.createMany({ data: fieldRows, skipDuplicates: true });
 
     // ── Pricing ───────────────────────────────────────────────────────────
-    if (pricingFields.length) {
+    if (pricingFields.length && !skipContent) {
       await tx.pricingItem.createMany({ data: pricingFields.map((p, i) => ({ businessId, key: p.key, label: p.label, type: p.type, amount: p.amount, unit: p.unit ?? null, category: p.category ?? null, description: p.description ?? null, sortOrder: i })), skipDuplicates: true });
     }
-    if (pricingFields.some((p) => p.key === "large_format_multiplier")) {
+    if (!skipContent && pricingFields.some((p) => p.key === "large_format_multiplier")) {
       await tx.pricingRule.create({
         data: { businessId, name: "Large-format tile multiplier", description: "Apply the large-format multiplier when tiles exceed 1200mm.", priority: 10, conditions: toJson({ match: "all", rules: [{ field: "inputs.tile_size_mm", operator: "gt", value: 1200 }] }), actions: toJson([{ type: "multiply_variable", variable: "labour", pricingItemKey: "large_format_multiplier" }]) },
       });
     }
 
     // ── Forms ─────────────────────────────────────────────────────────────
-    const forms = defaultForms(info, leadQuestions.filter((q) => q.showOnForms !== false).map(fieldToFormField));
+    const forms = skipContent ? [] : defaultForms(info, leadQuestions.filter((q) => q.showOnForms !== false).map(fieldToFormField));
     for (const f of forms) {
       await tx.form.create({ data: { businessId, slug: f.slug, name: f.name, action: f.action, fields: toJson(f.fields), settings: toJson(f.settings) } });
     }
@@ -270,7 +336,7 @@ export async function createBusiness(rawInput: CreateBusinessInput): Promise<Bus
     }
 
     // ── Pages + navigation ────────────────────────────────────────────────
-    if (!input.skipWebsiteGeneration) {
+    if (!skipWebsite) {
       for (const p of defaultSystemPages(info)) {
         const sections = websiteOverrides[p.systemKey] ?? p.sections;
         const page = await tx.page.create({
@@ -290,7 +356,7 @@ export async function createBusiness(rawInput: CreateBusinessInput): Promise<Bus
     }
 
     // ── Default automations ───────────────────────────────────────────────
-    await tx.automationRule.createMany({
+    if (!skipContent) await tx.automationRule.createMany({
       data: [
         { businessId, name: "Create job when quote accepted", triggerEvent: "quote.accepted", actions: toJson([{ type: "create_project_from_quote" }]) },
         { businessId, name: "Notify owner of new lead", triggerEvent: "lead.created", actions: toJson([{ type: "create_task", title: "Follow up new enquiry from {{name}}", dueInDays: 1 }]) },
@@ -302,9 +368,25 @@ export async function createBusiness(rawInput: CreateBusinessInput): Promise<Bus
     return created;
   }, { timeout: 120_000 });
 
-  await recordAudit({ actorUserId: input.createdByUserId ?? null, organizationId: business.organizationId, businessId: business.id, action: "business.created", entityType: "business", entityId: business.id, severity: "NOTICE", after: { name: business.name, slug: business.slug, industry: industry.slug } });
+  await recordAudit({ actorUserId: input.createdByUserId ?? null, organizationId: business.organizationId, businessId: business.id, action: "business.created", entityType: "business", entityId: business.id, severity: "NOTICE", after: { name: business.name, slug: business.slug, industry: industry.slug, templateId: input.templateId ?? null } });
   await flushEvents(eventIds);
+  if (invitedOwner) await sendOwnerInvite(invitedOwner, business, input.createdByUserId ?? null);
   return business;
+}
+
+/** Sends the owner invitation after the business exists. Never throws into creation. */
+async function sendOwnerInvite(owner: { userId: string; email: string; name: string }, business: Business, invitedByUserId: string | null): Promise<void> {
+  try {
+    const link = await createInviteToken(owner.email, { userId: owner.userId, businessId: business.id, role: "business_owner", invitedByUserId });
+    await sendMail({
+      to: owner.email,
+      subject: `You have been invited to manage ${business.name}`,
+      text: `Hi ${owner.name},\n\nYou have been invited as the owner of ${business.name} on ${env().PLATFORM_URL}.\n\nAccept the invitation and set your password here:\n${link}\n\nThe link expires in 7 days.`,
+    });
+    await recordAudit({ actorUserId: invitedByUserId, organizationId: business.organizationId, businessId: business.id, action: "user.invited", entityType: "user", entityId: owner.userId, severity: "NOTICE", metadata: { email: owner.email, role: "business_owner" } });
+  } catch (error) {
+    console.error("[business.create] owner invite email failed", error);
+  }
 }
 
 /** Convenience for callers holding only the platform client. */

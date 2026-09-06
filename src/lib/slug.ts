@@ -22,7 +22,7 @@ export const RESERVED_SLUGS = new Set([
   "media",
   "storage",
   "_next",
-  "_sites",
+  "s",
   "favicon.ico",
   "robots.txt",
   "sitemap.xml",
@@ -35,6 +35,7 @@ export const RESERVED_SLUGS = new Set([
   "health",
   "portal",
   "preview",
+  "s",
 ]);
 
 export function isReservedSlug(slug: string): boolean {

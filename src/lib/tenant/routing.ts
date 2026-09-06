@@ -49,9 +49,10 @@ export const RESERVED_TOP_LEVEL = new Set([
   "auth",
   "media",
   "_next",
-  "_sites",
+  "s",
   "favicon.ico",
   "robots.txt",
   "health",
   "portal",
+  "s",
 ]);

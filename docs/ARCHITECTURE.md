@@ -17,7 +17,7 @@ depends on Claude, an AI subscription, or a developer being present.
 │                                                                          │
 │  /super-admin    Platform control centre (platform OWNER/ADMIN only)     │
 │  /admin/[id]     Business admin (membership + permission gated)          │
-│  /_sites/[site]  Tenant website renderer (rewritten from host/path)      │
+│  /s/[site]  Tenant website renderer (rewritten from host/path)      │
 │  /api/site/*     Public tenant endpoints (forms, analytics)              │
 │  /media/*        Object serving with visibility checks                   │
 ├──────────────────────────────────────────────────────────────────────────┤
@@ -71,7 +71,7 @@ Every tenant-owned row carries `businessId`. Ownership is enforced twice:
 
 1. `src/middleware.ts` (edge, no DB) classifies the host:
    platform host + `/kabura/...` → path mode; `kabura.tradeone.com` → subdomain;
-   anything else → custom domain. It rewrites to `/_sites/<site>/<path>`.
+   anything else → custom domain. It rewrites to `/s/<site>/<path>`.
 2. `loadSiteContext()` resolves the business (by slug, or by verified domain),
    its published theme and menus using a tenant-scoped client.
 3. The page engine loads `pages.published` (an immutable snapshot) and renders

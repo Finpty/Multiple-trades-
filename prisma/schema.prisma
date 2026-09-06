@@ -1,0 +1,2086 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// TRADE ONE — canonical PostgreSQL schema
+//
+// Conventions
+//  • Tables are snake_case (@@map); columns stay camelCase (quoted identifiers).
+//  • Primary keys are uuid (gen_random_uuid()).
+//  • Every tenant-owned table carries `businessId` and is protected by
+//    PostgreSQL Row Level Security (see prisma/migrations/*_rls).
+//  • Money is stored as integer cents (`*Cents`). Rates are Decimal.
+//  • Structured configuration lives in jsonb columns; their TypeScript shapes
+//    are declared in src/lib/schemas/* and validated with zod at the boundary.
+//  • Important business records are soft-deleted (`deletedAt`) or archived
+//    through explicit status enums rather than physically removed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ENUMS
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum PlatformRole {
+  NONE
+  SUPPORT
+  ADMIN
+  OWNER
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  DELETED
+}
+
+enum AuthTokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  INVITE
+  MAGIC_LINK
+}
+
+enum RoleScope {
+  PLATFORM
+  ORGANIZATION
+  BUSINESS
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum BusinessStatus {
+  DRAFT
+  PUBLISHED
+  SUSPENDED
+  ARCHIVED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  PAUSED
+}
+
+enum DomainKind {
+  SUBDOMAIN
+  CUSTOM
+}
+
+enum DomainVerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+enum SslStatus {
+  NONE
+  PENDING
+  ACTIVE
+  ERROR
+}
+
+enum PageKind {
+  SYSTEM
+  CUSTOM
+  LANDING
+}
+
+enum PageStatus {
+  DRAFT
+  PUBLISHED
+  SCHEDULED
+  ARCHIVED
+}
+
+enum PageAudience {
+  PUBLIC
+  CUSTOMERS
+  STAFF
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum PricingMethod {
+  QUOTE
+  FIXED
+  RANGE
+  HOURLY
+  DAY_RATE
+  PER_SQM
+  PER_UNIT
+  PER_LINEAR_METRE
+}
+
+enum ServiceAreaType {
+  COUNTRY
+  STATE
+  REGION
+  CITY
+  SUBURB
+  POSTCODE
+}
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+  DOCUMENT
+  OTHER
+}
+
+enum MediaVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum ProjectMediaStage {
+  BEFORE
+  PROGRESS
+  AFTER
+  VIDEO
+  OTHER
+}
+
+enum FieldEntityType {
+  BUSINESS
+  SERVICE
+  PROJECT
+  CUSTOMER
+  LEAD
+  QUOTE
+  ESTIMATE
+  JOB
+}
+
+enum FieldType {
+  TEXT
+  TEXTAREA
+  RICHTEXT
+  NUMBER
+  MEASUREMENT
+  SELECT
+  MULTISELECT
+  BOOLEAN
+  DATE
+  TIME
+  EMAIL
+  PHONE
+  URL
+  MEDIA
+  ADDRESS
+}
+
+enum PricingItemType {
+  RATE
+  FEE
+  MULTIPLIER
+  PERCENT
+}
+
+enum CustomerStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  QUOTED
+  WON
+  LOST
+  ARCHIVED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  VIEWED
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  ARCHIVED
+}
+
+enum FormAction {
+  LEAD
+  QUOTE_REQUEST
+  BOOKING_REQUEST
+  CONTACT
+  PROJECT_REQUEST
+}
+
+enum FormSubmissionStatus {
+  NEW
+  PROCESSED
+  SPAM
+}
+
+enum JobStatus {
+  OPEN
+  COMPLETED
+  CANCELED
+  ARCHIVED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum BookingStatus {
+  REQUESTED
+  CONFIRMED
+  CANCELED
+  COMPLETED
+}
+
+enum RevisionEntityType {
+  PAGE
+  THEME
+  NAVIGATION
+  FORM
+  SERVICE
+  SITE
+}
+
+enum MessageChannel {
+  EMAIL
+  SMS
+  NOTE
+  SYSTEM
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+  INTERNAL
+}
+
+enum EventStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+enum AutomationRunStatus {
+  SUCCESS
+  SKIPPED
+  FAILED
+}
+
+enum AiScope {
+  PLATFORM
+  BUSINESS
+}
+
+enum AuditActorType {
+  USER
+  SYSTEM
+  API
+}
+
+enum AuditSeverity {
+  INFO
+  NOTICE
+  WARNING
+  CRITICAL
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// IDENTITY & ACCESS  (platform-wide tables, no RLS)
+// ═════════════════════════════════════════════════════════════════════════════
+
+model User {
+  id                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email              String       @unique
+  emailVerifiedAt    DateTime?    @db.Timestamptz(6)
+  name               String
+  passwordHash       String?
+  /// Platform-level role. NONE for every ordinary tenant user. Only OWNER/ADMIN
+  /// can reach the super admin. Never derived from any business membership.
+  platformRole       PlatformRole @default(NONE)
+  status             UserStatus   @default(ACTIVE)
+  avatarUrl          String?
+  phone              String?
+  locale             String       @default("en-AU")
+  timezone           String       @default("Australia/Perth")
+  mfaEnabled         Boolean      @default(false)
+  mfaSecretEncrypted String?
+  /// Bumped on password change / "sign out everywhere"; sessions carry the
+  /// value they were created with and are rejected on mismatch.
+  sessionVersion     Int          @default(1)
+  lastLoginAt        DateTime?    @db.Timestamptz(6)
+  deletedAt          DateTime?    @db.Timestamptz(6)
+  createdAt          DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime     @updatedAt @db.Timestamptz(6)
+
+  sessions                Session[]
+  authTokens              AuthToken[]
+  oauthAccounts           OAuthAccount[]
+  passkeys                Passkey[]
+  organizationMemberships OrganizationMembership[]
+  businessMemberships     BusinessMembership[]
+  notifications           Notification[]
+  auditLogs               AuditLog[]               @relation("AuditActor")
+  ownedOrganizations      Organization[]           @relation("OrganizationOwner")
+
+  @@index([platformRole])
+  @@index([status])
+  @@map("users")
+}
+
+model Session {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String    @db.Uuid
+  /// SHA-256 of the opaque cookie token. The raw token is never stored.
+  tokenHash      String    @unique
+  sessionVersion Int
+  expiresAt      DateTime  @db.Timestamptz(6)
+  lastActiveAt   DateTime  @default(now()) @db.Timestamptz(6)
+  ip             String?
+  userAgent      String?
+  revokedAt      DateTime? @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model AuthToken {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String?       @db.Uuid
+  email     String
+  type      AuthTokenType
+  tokenHash String        @unique
+  expiresAt DateTime      @db.Timestamptz(6)
+  usedAt    DateTime?     @db.Timestamptz(6)
+  metadata  Json          @default("{}")
+  createdAt DateTime      @default(now()) @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, type])
+  @@index([expiresAt])
+  @@map("auth_tokens")
+}
+
+model OAuthAccount {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String   @db.Uuid
+  provider          String
+  providerAccountId String
+  email             String?
+  tokensEncrypted   String?
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("oauth_accounts")
+}
+
+model Passkey {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @db.Uuid
+  credentialId String    @unique
+  publicKey    Bytes
+  counter      BigInt    @default(0)
+  transports   Json      @default("[]")
+  name         String?
+  lastUsedAt   DateTime? @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("passkeys")
+}
+
+/// Database-backed sliding-window rate limit buckets so limits hold across
+/// multiple application instances.
+model RateLimitBucket {
+  key       String   @id
+  count     Int      @default(0)
+  resetAt   DateTime @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([resetAt])
+  @@map("rate_limit_buckets")
+}
+
+model Role {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key            String    @unique
+  name           String
+  description    String?
+  scope          RoleScope
+  /// Array of permission keys (see src/lib/authz/permissions.ts)
+  permissions    Json      @default("[]")
+  isSystem       Boolean   @default(false)
+  organizationId String?   @db.Uuid
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(6)
+
+  organization            Organization?            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationMemberships OrganizationMembership[]
+  businessMemberships     BusinessMembership[]
+
+  @@index([scope])
+  @@index([organizationId])
+  @@map("roles")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TENANCY  (Platform → Organization → Business → BusinessLocation)
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Organization {
+  id           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  slug         String             @unique
+  status       OrganizationStatus @default(ACTIVE)
+  ownerUserId  String?            @db.Uuid
+  billingEmail String?
+  settings     Json               @default("{}")
+  deletedAt    DateTime?          @db.Timestamptz(6)
+  createdAt    DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime           @updatedAt @db.Timestamptz(6)
+
+  owner         User?                    @relation("OrganizationOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  businesses    Business[]
+  memberships   OrganizationMembership[]
+  subscriptions Subscription[]
+  roles         Role[]
+  integrations  Integration[]
+  apiKeys       ApiKey[]
+  auditLogs     AuditLog[]
+  domainEvents  DomainEvent[]
+
+  @@index([status])
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String           @db.Uuid
+  userId          String           @db.Uuid
+  roleId          String           @db.Uuid
+  status          MembershipStatus @default(ACTIVE)
+  invitedByUserId String?          @db.Uuid
+  invitedAt       DateTime?        @db.Timestamptz(6)
+  acceptedAt      DateTime?        @db.Timestamptz(6)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("organization_memberships")
+}
+
+model Business {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String         @db.Uuid
+  industryId      String?        @db.Uuid
+  templateId      String?        @db.Uuid
+  /// Platform-wide unique handle: used for  /<slug>  paths and  <slug>.<platform-host>
+  slug            String         @unique
+  name            String
+  legalName       String?
+  tradingName     String?
+  businessNumber  String?
+  taxNumber       String?
+  tagline         String?
+  description     String?
+  phone           String?
+  email           String?
+  website         String?
+  foundedYear     Int?
+  country         String         @default("AU")
+  state           String?
+  timezone        String         @default("Australia/Perth")
+  currency        String         @default("AUD")
+  locale          String         @default("en-AU")
+  taxName         String         @default("GST")
+  taxRate         Decimal        @default(10) @db.Decimal(6, 3)
+  taxInclusive    Boolean        @default(true)
+  serviceAreaText String?
+  status          BusinessStatus @default(DRAFT)
+  publishedAt     DateTime?      @db.Timestamptz(6)
+  logoMediaId     String?        @db.Uuid
+  settings        Json           @default("{}")
+  seoDefaults     Json           @default("{}")
+  createdByUserId String?        @db.Uuid
+  deletedAt       DateTime?      @db.Timestamptz(6)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(6)
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  industry     Industry?         @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  template     BusinessTemplate? @relation("TemplateBusinesses", fields: [templateId], references: [id], onDelete: SetNull)
+
+  locations              BusinessLocation[]
+  memberships            BusinessMembership[]
+  settingsRows           BusinessSetting[]
+  subscriptions          Subscription[]
+  domains                BusinessDomain[]
+  theme                  BusinessTheme?
+  pages                  Page[]
+  pageSections           PageSection[]
+  revisions              Revision[]
+  navigationMenus        NavigationMenu[]
+  services               Service[]
+  serviceAreas           ServiceArea[]
+  serviceAreaServices    ServiceAreaService[]
+  materials              Material[]
+  mediaFolders           MediaFolder[]
+  media                  Media[]
+  projects               Project[]
+  projectMedia           ProjectMedia[]
+  projectServices        ProjectService[]
+  teamMembers            TeamMember[]
+  reviews                Review[]
+  features               BusinessFeature[]
+  customFieldDefinitions CustomFieldDefinition[]
+  customFieldValues      CustomFieldValue[]
+  pricingItems           PricingItem[]
+  pricingRules           PricingRule[]
+  customers              Customer[]
+  leads                  Lead[]
+  quotes                 Quote[]
+  forms                  Form[]
+  formSubmissions        FormSubmission[]
+  workflows              Workflow[]
+  jobs                   Job[]
+  jobStageHistory        JobStageHistory[]
+  tasks                  Task[]
+  invoices               Invoice[]
+  payments               Payment[]
+  bookings               Booking[]
+  automationRules        AutomationRule[]
+  automationRuns         AutomationRun[]
+  messages               Message[]
+  integrations           Integration[]
+  webhooks               Webhook[]
+  aiProviders            AiProvider[]
+  aiUsage                AiUsage[]
+  redirects              Redirect[]
+  analyticsEvents        AnalyticsEvent[]
+  apiKeys                ApiKey[]
+  auditLogs              AuditLog[]
+  domainEvents           DomainEvent[]
+  notifications          Notification[]
+  templatesFrom          BusinessTemplate[]      @relation("TemplateSource")
+
+  @@index([organizationId])
+  @@index([industryId])
+  @@index([status])
+  @@map("businesses")
+}
+
+/// Physical premises / depots / service hubs of a business.
+model BusinessLocation {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String    @db.Uuid
+  name            String
+  isPrimary       Boolean   @default(false)
+  addressLine1    String?
+  addressLine2    String?
+  city            String?
+  state           String?
+  postcode        String?
+  country         String    @default("AU")
+  lat             Decimal?  @db.Decimal(9, 6)
+  lng             Decimal?  @db.Decimal(9, 6)
+  phone           String?
+  email           String?
+  openingHours    Json      @default("[]")
+  serviceRadiusKm Int?
+  isActive        Boolean   @default(true)
+  sortOrder       Int       @default(0)
+  deletedAt       DateTime? @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@map("business_locations")
+}
+
+model BusinessMembership {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String           @db.Uuid
+  userId          String           @db.Uuid
+  roleId          String           @db.Uuid
+  status          MembershipStatus @default(ACTIVE)
+  title           String?
+  invitedByUserId String?          @db.Uuid
+  invitedAt       DateTime?        @db.Timestamptz(6)
+  acceptedAt      DateTime?        @db.Timestamptz(6)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     Role     @relation(fields: [roleId], references: [id])
+
+  @@unique([businessId, userId])
+  @@index([userId])
+  @@map("business_memberships")
+}
+
+model BusinessSetting {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String   @db.Uuid
+  key        String
+  value      Json
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, key])
+  @@map("business_settings")
+}
+
+model Subscription {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId     String             @db.Uuid
+  businessId         String?            @db.Uuid
+  plan               String
+  status             SubscriptionStatus @default(ACTIVE)
+  seats              Int                @default(1)
+  priceCents         Int                @default(0)
+  currency           String             @default("AUD")
+  interval           String             @default("month")
+  currentPeriodStart DateTime?          @db.Timestamptz(6)
+  currentPeriodEnd   DateTime?          @db.Timestamptz(6)
+  trialEndsAt        DateTime?          @db.Timestamptz(6)
+  canceledAt         DateTime?          @db.Timestamptz(6)
+  provider           String?
+  externalId         String?
+  metadata           Json               @default("{}")
+  createdAt          DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  business     Business?    @relation(fields: [businessId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([businessId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PLATFORM CATALOG  (industries, templates, design families, features)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Data-driven industry definition. A new trade is a new row, never new code.
+model Industry {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug            String    @unique
+  name            String
+  description     String?
+  icon            String?
+  isActive        Boolean   @default(true)
+  isSystem        Boolean   @default(false)
+  sortOrder       Int       @default(0)
+  /// { service: "Service", project: "Project", quote: "Quote", job: "Job", ... }
+  terminology     Json      @default("{}")
+  /// [{ name, slug, shortDescription, pricingMethod, children:[...] }]
+  defaultServices Json      @default("[]")
+  /// CustomFieldDefinition seeds for JOB entities
+  jobFields       Json      @default("[]")
+  /// CustomFieldDefinition seeds for ESTIMATE/QUOTE entities
+  estimateFields  Json      @default("[]")
+  /// PricingItem seeds  [{ key, label, type, amount, unit, category }]
+  pricingFields   Json      @default("[]")
+  /// Default section blocks for generated system pages, keyed by page systemKey
+  websiteSections Json      @default("{}")
+  /// Form fields appended to the default lead/quote forms
+  leadQuestions   Json      @default("[]")
+  /// Default workflow stages  [{ key, name, color, description }]
+  projectStages   Json      @default("[]")
+  /// Feature keys enabled by default for new businesses in this industry
+  defaultFeatures Json      @default("[]")
+  deletedAt       DateTime? @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
+
+  businesses Business[]
+  templates  BusinessTemplate[]
+
+  @@index([isActive, sortOrder])
+  @@map("industries")
+}
+
+/// A saved, reusable business configuration snapshot (no private data).
+model BusinessTemplate {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug             String    @unique
+  name             String
+  description      String?
+  category         String?
+  industryId       String?   @db.Uuid
+  previewImageUrl  String?
+  /// Exported business configuration (see src/lib/business/export.ts)
+  snapshot         Json
+  isPremium        Boolean   @default(false)
+  priceCents       Int       @default(0)
+  isActive         Boolean   @default(true)
+  sourceBusinessId String?   @db.Uuid
+  createdByUserId  String?   @db.Uuid
+  deletedAt        DateTime? @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+
+  industry       Industry?  @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  sourceBusiness Business?  @relation("TemplateSource", fields: [sourceBusinessId], references: [id], onDelete: SetNull)
+  businesses     Business[] @relation("TemplateBusinesses")
+
+  @@index([industryId])
+  @@index([isActive])
+  @@map("business_templates")
+}
+
+/// Premium design family (Architectural, Minimal Luxury, ...). A preset of
+/// design tokens, not a separate website.
+model DesignFamily {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug            String   @unique
+  name            String
+  description     String?
+  tokens          Json
+  previewImageUrl String?
+  isActive        Boolean  @default(true)
+  isSystem        Boolean  @default(false)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+
+  themes BusinessTheme[]
+
+  @@map("design_families")
+}
+
+model FeatureDefinition {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key            String   @unique
+  name           String
+  description    String?
+  category       String   @default("general")
+  defaultEnabled Boolean  @default(false)
+  requiresAi     Boolean  @default(false)
+  isPlatformOnly Boolean  @default(false)
+  configSchema   Json     @default("{}")
+  sortOrder      Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+
+  @@map("feature_definitions")
+}
+
+model PlatformSetting {
+  key             String   @id
+  value           Json
+  updatedByUserId String?  @db.Uuid
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+
+  @@map("platform_settings")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DOMAINS & THEME
+// ═════════════════════════════════════════════════════════════════════════════
+
+model BusinessDomain {
+  id                 String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId         String                   @db.Uuid
+  /// Lower-cased hostname, e.g. kaburatiling.com.au or kabura.tradeone.com
+  hostname           String                   @unique
+  kind               DomainKind               @default(CUSTOM)
+  isPrimary          Boolean                  @default(false)
+  verificationStatus DomainVerificationStatus @default(PENDING)
+  verificationToken  String
+  verifiedAt         DateTime?                @db.Timestamptz(6)
+  lastCheckedAt      DateTime?                @db.Timestamptz(6)
+  verificationError  String?
+  sslStatus          SslStatus                @default(NONE)
+  sslProvider        String?
+  redirectToDomainId String?                  @db.Uuid
+  redirectType       Int                      @default(301)
+  providerConfig     Json                     @default("{}")
+  createdAt          DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime                 @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([verificationStatus])
+  @@map("business_domains")
+}
+
+model BusinessTheme {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId     String    @unique @db.Uuid
+  designFamilyId String?   @db.Uuid
+  /// Draft design tokens (see src/lib/theme/tokens.ts)
+  draft          Json
+  /// Tokens currently served to the public site
+  published      Json?
+  publishedAt    DateTime? @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(6)
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  designFamily DesignFamily? @relation(fields: [designFamilyId], references: [id], onDelete: SetNull)
+
+  @@map("business_themes")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// WEBSITE: PAGES, SECTIONS, NAVIGATION, REVISIONS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Page {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String       @db.Uuid
+  parentId        String?      @db.Uuid
+  /// URL slug relative to the site root. "" for the home page.
+  slug            String
+  title           String
+  kind            PageKind     @default(CUSTOM)
+  /// For SYSTEM pages: home | services | projects | about | reviews | areas | contact | quote | portal
+  systemKey       String?
+  templateKey     String       @default("default")
+  status          PageStatus   @default(DRAFT)
+  audience        PageAudience @default(PUBLIC)
+  showInNav       Boolean      @default(true)
+  sortOrder       Int          @default(0)
+  seo             Json         @default("{}")
+  settings        Json         @default("{}")
+  /// Immutable snapshot served to the public site: { title, seo, settings, sections:[...] }
+  published       Json?
+  publishedAt     DateTime?    @db.Timestamptz(6)
+  scheduledAt     DateTime?    @db.Timestamptz(6)
+  archivedAt      DateTime?    @db.Timestamptz(6)
+  createdByUserId String?      @db.Uuid
+  updatedByUserId String?      @db.Uuid
+  deletedAt       DateTime?    @db.Timestamptz(6)
+  createdAt       DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime     @updatedAt @db.Timestamptz(6)
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   Page?         @relation("PageChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children Page[]        @relation("PageChildren")
+  sections PageSection[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, status])
+  @@index([businessId, systemKey])
+  @@map("pages")
+}
+
+/// Draft content blocks of a page. Publishing snapshots these into Page.published.
+model PageSection {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String   @db.Uuid
+  pageId     String   @db.Uuid
+  /// Block type key from the block registry (hero, text, gallery, ...)
+  type       String
+  sortOrder  Int      @default(0)
+  props      Json     @default("{}")
+  /// Layout settings: background, spacing, width, anchor, visibility
+  settings   Json     @default("{}")
+  isHidden   Boolean  @default(false)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  page     Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId, sortOrder])
+  @@index([businessId])
+  @@map("page_sections")
+}
+
+model Revision {
+  id              String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String             @db.Uuid
+  entityType      RevisionEntityType
+  entityId        String
+  version         Int
+  snapshot        Json
+  note            String?
+  createdByUserId String?            @db.Uuid
+  createdAt       DateTime           @default(now()) @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, entityType, entityId, version])
+  @@index([businessId, entityType, entityId, createdAt])
+  @@map("revisions")
+}
+
+model NavigationMenu {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String    @db.Uuid
+  /// header | footer | mobile | <custom>
+  key         String
+  name        String
+  draft       Json      @default("[]")
+  published   Json?
+  publishedAt DateTime? @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, key])
+  @@map("navigation_menus")
+}
+
+model Redirect {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String   @db.Uuid
+  fromPath   String
+  toPath     String
+  statusCode Int      @default(301)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, fromPath])
+  @@map("redirects")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CATALOG: SERVICES, SERVICE AREAS, MATERIALS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Service {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId       String        @db.Uuid
+  parentId         String?       @db.Uuid
+  name             String
+  slug             String
+  shortDescription String?
+  description      String?
+  icon             String?
+  pricingMethod    PricingMethod @default(QUOTE)
+  priceMinCents    Int?
+  priceMaxCents    Int?
+  priceUnit        String?
+  ctaLabel         String?
+  ctaHref          String?
+  faqs             Json          @default("[]")
+  seo              Json          @default("{}")
+  customFields     Json          @default("{}")
+  featuredMediaId  String?       @db.Uuid
+  videoMediaId     String?       @db.Uuid
+  /// Ordered media ids
+  gallery          Json          @default("[]")
+  status           ContentStatus @default(PUBLISHED)
+  isEnabled        Boolean       @default(true)
+  isFeatured       Boolean       @default(false)
+  sortOrder        Int           @default(0)
+  deletedAt        DateTime?     @db.Timestamptz(6)
+  createdAt        DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime      @updatedAt @db.Timestamptz(6)
+
+  business     Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent       Service?             @relation("ServiceChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Service[]            @relation("ServiceChildren")
+  areas        ServiceAreaService[]
+  materials    ServiceMaterial[]
+  projects     ProjectService[]
+  leads        Lead[]
+  bookings     Booking[]
+  pricingItems PricingItem[]
+  pricingRules PricingRule[]
+  workflows    Workflow[]
+  reviews      Review[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, isEnabled, sortOrder])
+  @@index([parentId])
+  @@map("services")
+}
+
+/// Geographic service-area taxonomy (country → state → region → city → suburb → postcode).
+model ServiceArea {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId   String          @db.Uuid
+  parentId     String?         @db.Uuid
+  type         ServiceAreaType
+  name         String
+  slug         String
+  postcode     String?
+  state        String?
+  country      String          @default("AU")
+  lat          Decimal?        @db.Decimal(9, 6)
+  lng          Decimal?        @db.Decimal(9, 6)
+  radiusKm     Int?
+  isPrimary    Boolean         @default(false)
+  isEnabled    Boolean         @default(true)
+  /// Whether a public service-area page should be generated for this area.
+  generatePage Boolean         @default(true)
+  /// Unique local content for the generated page (prevents thin/duplicate pages).
+  content      Json            @default("{}")
+  seo          Json            @default("{}")
+  sortOrder    Int             @default(0)
+  deletedAt    DateTime?       @db.Timestamptz(6)
+  createdAt    DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime        @updatedAt @db.Timestamptz(6)
+
+  business Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   ServiceArea?         @relation("ServiceAreaChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children ServiceArea[]        @relation("ServiceAreaChildren")
+  services ServiceAreaService[]
+  projects Project[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, type, isEnabled])
+  @@index([parentId])
+  @@map("service_areas")
+}
+
+model ServiceAreaService {
+  id            String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId    String @db.Uuid
+  serviceAreaId String @db.Uuid
+  serviceId     String @db.Uuid
+
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  serviceArea ServiceArea @relation(fields: [serviceAreaId], references: [id], onDelete: Cascade)
+  service     Service     @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceAreaId, serviceId])
+  @@index([serviceId])
+  @@map("service_area_services")
+}
+
+model Material {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String    @db.Uuid
+  name        String
+  slug        String
+  category    String?
+  description String?
+  mediaId     String?   @db.Uuid
+  attributes  Json      @default("{}")
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime? @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  services ServiceMaterial[]
+
+  @@unique([businessId, slug])
+  @@map("materials")
+}
+
+model ServiceMaterial {
+  serviceId  String @db.Uuid
+  materialId String @db.Uuid
+
+  service  Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@id([serviceId, materialId])
+  @@map("service_materials")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MEDIA  (metadata + object references only; bytes live in object storage)
+// ═════════════════════════════════════════════════════════════════════════════
+
+model MediaFolder {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String   @db.Uuid
+  parentId   String?  @db.Uuid
+  name       String
+  slug       String
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   MediaFolder?  @relation("MediaFolderChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children MediaFolder[] @relation("MediaFolderChildren")
+  media    Media[]
+
+  @@unique([businessId, parentId, slug])
+  @@index([businessId])
+  @@map("media_folders")
+}
+
+model Media {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId       String          @db.Uuid
+  folderId         String?         @db.Uuid
+  kind             MediaKind
+  visibility       MediaVisibility @default(PUBLIC)
+  /// Storage driver key at upload time (local | s3). Objects can be migrated between drivers.
+  storageDriver    String
+  /// Object key within the driver, always prefixed by the business id.
+  storageKey       String
+  filename         String
+  originalName     String
+  mimeType         String
+  sizeBytes        BigInt
+  width            Int?
+  height           Int?
+  durationSeconds  Int?
+  checksum         String?
+  title            String?
+  altText          String?
+  caption          String?
+  tags             Json            @default("[]")
+  metadata         Json            @default("{}")
+  /// Derived renditions  { thumb: {key,width,height}, medium: {...}, ... }
+  variants         Json            @default("{}")
+  sortOrder        Int             @default(0)
+  uploadedByUserId String?         @db.Uuid
+  deletedAt        DateTime?       @db.Timestamptz(6)
+  createdAt        DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime        @updatedAt @db.Timestamptz(6)
+
+  business     Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  folder       MediaFolder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  projectMedia ProjectMedia[]
+
+  @@unique([storageDriver, storageKey])
+  @@index([businessId, folderId])
+  @@index([businessId, kind])
+  @@index([businessId, createdAt])
+  @@map("media")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PORTFOLIO, TEAM, REVIEWS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Project {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId        String        @db.Uuid
+  serviceAreaId     String?       @db.Uuid
+  title             String
+  slug              String
+  summary           String?
+  description       String?
+  locationText      String?
+  projectSize       String?
+  completionDate    DateTime?     @db.Date
+  challenges        String?
+  solutions         String?
+  testimonial       String?
+  testimonialAuthor String?
+  /// [{ name, type, notes }] e.g. tile type, stone type
+  materials         Json          @default("[]")
+  customFields      Json          @default("{}")
+  featuredMediaId   String?       @db.Uuid
+  videoMediaId      String?       @db.Uuid
+  status            ContentStatus @default(DRAFT)
+  isFeatured        Boolean       @default(false)
+  sortOrder         Int           @default(0)
+  seo               Json          @default("{}")
+  deletedAt         DateTime?     @db.Timestamptz(6)
+  createdAt         DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @db.Timestamptz(6)
+
+  business    Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  serviceArea ServiceArea?     @relation(fields: [serviceAreaId], references: [id], onDelete: SetNull)
+  media       ProjectMedia[]
+  services    ProjectService[]
+  reviews     Review[]
+  jobs        Job[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, status, sortOrder])
+  @@map("projects")
+}
+
+model ProjectMedia {
+  id         String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String            @db.Uuid
+  projectId  String            @db.Uuid
+  mediaId    String            @db.Uuid
+  stage      ProjectMediaStage @default(AFTER)
+  caption    String?
+  sortOrder  Int               @default(0)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  media    Media    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, mediaId, stage])
+  @@index([projectId, stage, sortOrder])
+  @@map("project_media")
+}
+
+model ProjectService {
+  businessId String @db.Uuid
+  projectId  String @db.Uuid
+  serviceId  String @db.Uuid
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  service  Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, serviceId])
+  @@index([serviceId])
+  @@map("project_services")
+}
+
+model TeamMember {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String    @db.Uuid
+  name       String
+  role       String?
+  bio        String?
+  email      String?
+  phone      String?
+  mediaId    String?   @db.Uuid
+  sortOrder  Int       @default(0)
+  isActive   Boolean   @default(true)
+  deletedAt  DateTime? @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, sortOrder])
+  @@map("team_members")
+}
+
+model Review {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String    @db.Uuid
+  projectId   String?   @db.Uuid
+  serviceId   String?   @db.Uuid
+  authorName  String
+  rating      Int
+  title       String?
+  body        String
+  source      String?
+  reviewedAt  DateTime? @db.Date
+  isPublished Boolean   @default(true)
+  isFeatured  Boolean   @default(false)
+  sortOrder   Int       @default(0)
+  deletedAt   DateTime? @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  project  Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  service  Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, isPublished, sortOrder])
+  @@map("reviews")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FEATURES & CUSTOM FIELDS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model BusinessFeature {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String   @db.Uuid
+  featureKey String
+  isEnabled  Boolean  @default(false)
+  config     Json     @default("{}")
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, featureKey])
+  @@map("business_features")
+}
+
+model CustomFieldDefinition {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId   String          @db.Uuid
+  entityType   FieldEntityType
+  key          String
+  label        String
+  type         FieldType
+  /// For SELECT/MULTISELECT: [{ value, label }]
+  options      Json            @default("[]")
+  isRequired   Boolean         @default(false)
+  helpText     String?
+  groupName    String?
+  defaultValue Json?
+  validation   Json            @default("{}")
+  showOnForms  Boolean         @default(false)
+  sortOrder    Int             @default(0)
+  isActive     Boolean         @default(true)
+  deletedAt    DateTime?       @db.Timestamptz(6)
+  createdAt    DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime        @updatedAt @db.Timestamptz(6)
+
+  business Business           @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  values   CustomFieldValue[]
+
+  @@unique([businessId, entityType, key])
+  @@index([businessId, entityType, sortOrder])
+  @@map("custom_field_definitions")
+}
+
+model CustomFieldValue {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId   String          @db.Uuid
+  definitionId String          @db.Uuid
+  entityType   FieldEntityType
+  entityId     String          @db.Uuid
+  value        Json
+  updatedAt    DateTime        @updatedAt @db.Timestamptz(6)
+
+  business   Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  definition CustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  @@unique([definitionId, entityId])
+  @@index([businessId, entityType, entityId])
+  @@map("custom_field_values")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PRICING ENGINE
+// ═════════════════════════════════════════════════════════════════════════════
+
+model PricingItem {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String          @db.Uuid
+  serviceId   String?         @db.Uuid
+  key         String
+  label       String
+  type        PricingItemType @default(RATE)
+  amount      Decimal         @db.Decimal(14, 4)
+  unit        String?
+  category    String?
+  description String?
+  sortOrder   Int             @default(0)
+  isActive    Boolean         @default(true)
+  deletedAt   DateTime?       @db.Timestamptz(6)
+  createdAt   DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime        @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  service  Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@unique([businessId, key])
+  @@index([businessId, category, sortOrder])
+  @@map("pricing_items")
+}
+
+/// Generic rule: IF conditions (all/any) THEN actions. Evaluated by src/lib/pricing/engine.ts
+model PricingRule {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String    @db.Uuid
+  serviceId   String?   @db.Uuid
+  name        String
+  description String?
+  priority    Int       @default(100)
+  /// { match: "all"|"any", rules: [{ field, operator, value }] }
+  conditions  Json      @default("{}")
+  /// [{ type: "set_variable"|"multiply"|"add_fee"|"add_line_item"|..., ... }]
+  actions     Json      @default("[]")
+  isActive    Boolean   @default(true)
+  deletedAt   DateTime? @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  service  Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, isActive, priority])
+  @@map("pricing_rules")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CRM: CUSTOMERS, LEADS, QUOTES, FORMS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Customer {
+  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId   String         @db.Uuid
+  firstName    String
+  lastName     String?
+  email        String?
+  phone        String?
+  company      String?
+  address      Json           @default("{}")
+  notes        String?
+  tags         Json           @default("[]")
+  source       String?
+  customFields Json           @default("{}")
+  portalUserId String?        @db.Uuid
+  status       CustomerStatus @default(ACTIVE)
+  deletedAt    DateTime?      @db.Timestamptz(6)
+  createdAt    DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime       @updatedAt @db.Timestamptz(6)
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  leads    Lead[]
+  quotes   Quote[]
+  jobs     Job[]
+  invoices Invoice[]
+  payments Payment[]
+  bookings Booking[]
+  messages Message[]
+  tasks    Task[]
+
+  @@index([businessId, status, createdAt])
+  @@index([businessId, email])
+  @@index([businessId, phone])
+  @@map("customers")
+}
+
+model Lead {
+  id               String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId       String     @db.Uuid
+  customerId       String?    @db.Uuid
+  serviceId        String?    @db.Uuid
+  formSubmissionId String?    @unique @db.Uuid
+  source           String?
+  status           LeadStatus @default(NEW)
+  name             String
+  email            String?
+  phone            String?
+  message          String?
+  locationText     String?
+  address          Json       @default("{}")
+  data             Json       @default("{}")
+  valueCents       Int?
+  assignedToUserId String?    @db.Uuid
+  convertedQuoteId String?    @db.Uuid
+  deletedAt        DateTime?  @db.Timestamptz(6)
+  createdAt        DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime   @updatedAt @db.Timestamptz(6)
+
+  business       Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer       Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  service        Service?        @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  formSubmission FormSubmission? @relation(fields: [formSubmissionId], references: [id], onDelete: SetNull)
+  quotes         Quote[]
+  bookings       Booking[]
+  messages       Message[]
+  tasks          Task[]
+
+  @@index([businessId, status, createdAt])
+  @@index([businessId, assignedToUserId])
+  @@map("leads")
+}
+
+model Quote {
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId        String      @db.Uuid
+  customerId        String?     @db.Uuid
+  leadId            String?     @db.Uuid
+  number            String
+  title             String
+  status            QuoteStatus @default(DRAFT)
+  currency          String      @default("AUD")
+  /// [{ id, description, quantity, unit, unitCents, totalCents, pricingItemKey? }]
+  lineItems         Json        @default("[]")
+  /// Calculator inputs used to produce this quote (if any)
+  inputs            Json        @default("{}")
+  /// Pricing engine trace (rules applied, variables)
+  calculation       Json        @default("{}")
+  subtotalCents     Int         @default(0)
+  taxCents          Int         @default(0)
+  totalCents        Int         @default(0)
+  depositCents      Int         @default(0)
+  notes             String?
+  terms             String?
+  validUntil        DateTime?   @db.Date
+  publicToken       String      @unique
+  sentAt            DateTime?   @db.Timestamptz(6)
+  viewedAt          DateTime?   @db.Timestamptz(6)
+  acceptedAt        DateTime?   @db.Timestamptz(6)
+  declinedAt        DateTime?   @db.Timestamptz(6)
+  acceptedByName    String?
+  acceptedSignature Json?
+  createdByUserId   String?     @db.Uuid
+  deletedAt         DateTime?   @db.Timestamptz(6)
+  createdAt         DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime    @updatedAt @db.Timestamptz(6)
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  lead     Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  jobs     Job[]
+  invoices Invoice[]
+
+  @@unique([businessId, number])
+  @@index([businessId, status, createdAt])
+  @@index([customerId])
+  @@map("quotes")
+}
+
+model Form {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String     @db.Uuid
+  name        String
+  slug        String
+  description String?
+  action      FormAction @default(LEAD)
+  /// [{ id, type, label, key, required, options, placeholder, helpText, width }]
+  fields      Json       @default("[]")
+  /// { submitLabel, successMessage, redirectUrl, notifyEmails, autoReply }
+  settings    Json       @default("{}")
+  isActive    Boolean    @default(true)
+  deletedAt   DateTime?  @db.Timestamptz(6)
+  createdAt   DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime   @updatedAt @db.Timestamptz(6)
+
+  business    Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  submissions FormSubmission[]
+
+  @@unique([businessId, slug])
+  @@map("forms")
+}
+
+model FormSubmission {
+  id         String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String               @db.Uuid
+  formId     String               @db.Uuid
+  data       Json
+  /// [{ fieldKey, mediaId }]
+  files      Json                 @default("[]")
+  status     FormSubmissionStatus @default(NEW)
+  ip         String?
+  userAgent  String?
+  pageUrl    String?
+  createdAt  DateTime             @default(now()) @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  form     Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  lead     Lead?
+
+  @@index([businessId, formId, createdAt])
+  @@map("form_submissions")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// OPERATIONS: WORKFLOWS, JOBS, TASKS, INVOICES, PAYMENTS, BOOKINGS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Workflow {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String    @db.Uuid
+  serviceId   String?   @db.Uuid
+  key         String
+  name        String
+  description String?
+  /// [{ key, name, color, description, isTerminal }]
+  stages      Json      @default("[]")
+  isDefault   Boolean   @default(false)
+  deletedAt   DateTime? @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  service  Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  jobs     Job[]
+
+  @@unique([businessId, key])
+  @@map("workflows")
+}
+
+model Job {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId       String    @db.Uuid
+  workflowId       String    @db.Uuid
+  customerId       String?   @db.Uuid
+  quoteId          String?   @db.Uuid
+  projectId        String?   @db.Uuid
+  number           String
+  title            String
+  description      String?
+  stageKey         String
+  stageChangedAt   DateTime  @default(now()) @db.Timestamptz(6)
+  status           JobStatus @default(OPEN)
+  priority         Int       @default(0)
+  scheduledStart   DateTime? @db.Timestamptz(6)
+  scheduledEnd     DateTime? @db.Timestamptz(6)
+  address          Json      @default("{}")
+  assignedToUserId String?   @db.Uuid
+  valueCents       Int?
+  customFields     Json      @default("{}")
+  completedAt      DateTime? @db.Timestamptz(6)
+  deletedAt        DateTime? @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+
+  business     Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  workflow     Workflow          @relation(fields: [workflowId], references: [id])
+  customer     Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  quote        Quote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  project      Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  stageHistory JobStageHistory[]
+  tasks        Task[]
+  invoices     Invoice[]
+
+  @@unique([businessId, number])
+  @@index([businessId, status, stageKey])
+  @@index([businessId, assignedToUserId])
+  @@index([customerId])
+  @@map("jobs")
+}
+
+model JobStageHistory {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String   @db.Uuid
+  jobId           String   @db.Uuid
+  fromStage       String?
+  toStage         String
+  note            String?
+  changedByUserId String?  @db.Uuid
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job      Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+  @@map("job_stage_history")
+}
+
+model Task {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId       String    @db.Uuid
+  jobId            String?   @db.Uuid
+  leadId           String?   @db.Uuid
+  customerId       String?   @db.Uuid
+  title            String
+  description      String?
+  dueAt            DateTime? @db.Timestamptz(6)
+  completedAt      DateTime? @db.Timestamptz(6)
+  assignedToUserId String?   @db.Uuid
+  priority         Int       @default(0)
+  source           String?
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  lead     Lead?     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, completedAt, dueAt])
+  @@index([businessId, assignedToUserId])
+  @@map("tasks")
+}
+
+model Invoice {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId    String        @db.Uuid
+  customerId    String?       @db.Uuid
+  jobId         String?       @db.Uuid
+  quoteId       String?       @db.Uuid
+  number        String
+  status        InvoiceStatus @default(DRAFT)
+  currency      String        @default("AUD")
+  lineItems     Json          @default("[]")
+  subtotalCents Int           @default(0)
+  taxCents      Int           @default(0)
+  totalCents    Int           @default(0)
+  paidCents     Int           @default(0)
+  dueAt         DateTime?     @db.Date
+  sentAt        DateTime?     @db.Timestamptz(6)
+  paidAt        DateTime?     @db.Timestamptz(6)
+  notes         String?
+  publicToken   String        @unique
+  deletedAt     DateTime?     @db.Timestamptz(6)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @db.Timestamptz(6)
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  quote    Quote?    @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  payments Payment[]
+
+  @@unique([businessId, number])
+  @@index([businessId, status, dueAt])
+  @@map("invoices")
+}
+
+model Payment {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String        @db.Uuid
+  invoiceId   String?       @db.Uuid
+  customerId  String?       @db.Uuid
+  amountCents Int
+  currency    String        @default("AUD")
+  status      PaymentStatus @default(PENDING)
+  provider    String?
+  externalId  String?
+  method      String?
+  receivedAt  DateTime?     @db.Timestamptz(6)
+  metadata    Json          @default("{}")
+  createdAt   DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(6)
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  invoice  Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status, createdAt])
+  @@index([provider, externalId])
+  @@map("payments")
+}
+
+model Booking {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId       String        @db.Uuid
+  customerId       String?       @db.Uuid
+  serviceId        String?       @db.Uuid
+  leadId           String?       @db.Uuid
+  startsAt         DateTime      @db.Timestamptz(6)
+  endsAt           DateTime?     @db.Timestamptz(6)
+  status           BookingStatus @default(REQUESTED)
+  notes            String?
+  address          Json          @default("{}")
+  assignedToUserId String?       @db.Uuid
+  createdAt        DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime      @updatedAt @db.Timestamptz(6)
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  service  Service?  @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  lead     Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, startsAt])
+  @@map("bookings")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUTOMATION, EVENTS, MESSAGING, NOTIFICATIONS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model AutomationRule {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId   String    @db.Uuid
+  name         String
+  description  String?
+  /// Domain event type, e.g. quote.accepted, lead.created, invoice.overdue
+  triggerEvent String
+  conditions   Json      @default("{}")
+  actions      Json      @default("[]")
+  isActive     Boolean   @default(true)
+  runCount     Int       @default(0)
+  lastRunAt    DateTime? @db.Timestamptz(6)
+  deletedAt    DateTime? @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  runs     AutomationRun[]
+
+  @@index([businessId, triggerEvent, isActive])
+  @@map("automation_rules")
+}
+
+model AutomationRun {
+  id         String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String              @db.Uuid
+  ruleId     String              @db.Uuid
+  eventId    String?             @db.Uuid
+  status     AutomationRunStatus
+  result     Json                @default("{}")
+  error      String?
+  createdAt  DateTime            @default(now()) @db.Timestamptz(6)
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  rule     AutomationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+  @@index([ruleId, createdAt])
+  @@map("automation_runs")
+}
+
+/// Persisted domain events (outbox). Written in the same transaction as the
+/// mutation that caused them; processed by in-process handlers and, later,
+/// by external workers/webhooks.
+model DomainEvent {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId     String?     @db.Uuid
+  organizationId String?     @db.Uuid
+  type           String
+  payload        Json        @default("{}")
+  actorUserId    String?     @db.Uuid
+  status         EventStatus @default(PENDING)
+  attempts       Int         @default(0)
+  processedAt    DateTime?   @db.Timestamptz(6)
+  error          String?
+  createdAt      DateTime    @default(now()) @db.Timestamptz(6)
+
+  business     Business?     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([businessId, type, createdAt])
+  @@map("domain_events")
+}
+
+model Message {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId  String           @db.Uuid
+  customerId  String?          @db.Uuid
+  leadId      String?          @db.Uuid
+  channel     MessageChannel
+  direction   MessageDirection
+  subject     String?
+  body        String
+  toAddress   String?
+  fromAddress String?
+  status      String           @default("sent")
+  metadata    Json             @default("{}")
+  sentAt      DateTime?        @db.Timestamptz(6)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(6)
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  lead     Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([customerId, createdAt])
+  @@map("messages")
+}
+
+model Notification {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @db.Uuid
+  businessId String?   @db.Uuid
+  type       String
+  title      String
+  body       String?
+  data       Json      @default("{}")
+  readAt     DateTime? @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// INTEGRATIONS, WEBHOOKS, API KEYS, AI
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Integration {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId       String?   @db.Uuid
+  organizationId   String?   @db.Uuid
+  provider         String
+  name             String
+  config           Json      @default("{}")
+  /// AES-256-GCM encrypted JSON blob of secrets (never returned to clients)
+  secretsEncrypted String?
+  isEnabled        Boolean   @default(false)
+  status           String    @default("disconnected")
+  lastSyncAt       DateTime? @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+
+  business     Business?     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, provider])
+  @@index([organizationId, provider])
+  @@map("integrations")
+}
+
+model Webhook {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String    @db.Uuid
+  url             String
+  events          Json      @default("[]")
+  secretEncrypted String?
+  isActive        Boolean   @default(true)
+  lastStatus      Int?
+  lastCalledAt    DateTime? @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, isActive])
+  @@map("webhooks")
+}
+
+model ApiKey {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId      String?   @db.Uuid
+  organizationId  String?   @db.Uuid
+  name            String
+  prefix          String
+  keyHash         String    @unique
+  scopes          Json      @default("[]")
+  lastUsedAt      DateTime? @db.Timestamptz(6)
+  expiresAt       DateTime? @db.Timestamptz(6)
+  revokedAt       DateTime? @db.Timestamptz(6)
+  createdByUserId String?   @db.Uuid
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+
+  business     Business?     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([organizationId])
+  @@map("api_keys")
+}
+
+/// AI provider configuration. PLATFORM scope rows are managed in Super Admin;
+/// BUSINESS scope rows let a business bring its own key. The application
+/// functions fully with zero rows in this table.
+model AiProvider {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  scope             AiScope  @default(PLATFORM)
+  businessId        String?  @db.Uuid
+  /// anthropic | openai | google | openai_compatible | local
+  provider          String
+  name              String
+  model             String
+  baseUrl           String?
+  apiKeyEncrypted   String?
+  isEnabled         Boolean  @default(true)
+  isDefault         Boolean  @default(false)
+  priority          Int      @default(100)
+  monthlyTokenLimit Int?
+  settings          Json     @default("{}")
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(6)
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  usage    AiUsage[]
+
+  @@index([scope, isEnabled, priority])
+  @@index([businessId])
+  @@map("ai_providers")
+}
+
+model AiUsage {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId   String?  @db.Uuid
+  providerId   String?  @db.Uuid
+  userId       String?  @db.Uuid
+  feature      String
+  model        String
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  costMicros   Int      @default(0)
+  latencyMs    Int?
+  status       String   @default("ok")
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  business Business?   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  provider AiProvider? @relation(fields: [providerId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([providerId, createdAt])
+  @@map("ai_usage")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUDIT & ANALYTICS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model AuditLog {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorUserId    String?        @db.Uuid
+  actorType      AuditActorType @default(USER)
+  organizationId String?        @db.Uuid
+  businessId     String?        @db.Uuid
+  action         String
+  entityType     String
+  entityId       String?
+  severity       AuditSeverity  @default(INFO)
+  before         Json?
+  after          Json?
+  metadata       Json           @default("{}")
+  ip             String?
+  userAgent      String?
+  requestId      String?
+  createdAt      DateTime       @default(now()) @db.Timestamptz(6)
+
+  actor        User?         @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  business     Business?     @relation(fields: [businessId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([entityType, entityId])
+  @@index([severity, createdAt])
+  @@map("audit_logs")
+}
+
+model AnalyticsEvent {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessId String   @db.Uuid
+  type       String
+  path       String?
+  referrer   String?
+  sessionId  String?
+  country    String?
+  device     String?
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+  @@index([businessId, type, createdAt])
+  @@map("analytics_events")
+}

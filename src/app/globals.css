@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  @apply bg-neutral-50 text-neutral-900 antialiased;
+}
+
+/* Tenant sites receive their design tokens as CSS variables on .site-root (see src/lib/theme). */
+.site-root {
+  font-family: var(--font-body, var(--font-sans));
+  background: var(--color-background, #ffffff);
+  color: var(--color-text, #111111);
+}

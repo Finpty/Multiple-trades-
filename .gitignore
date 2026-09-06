@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+dist
+*.log
+.env
+.env.local
+.env.*.local
+prisma/*.db
+prisma/*.db-journal
+storage/media/*
+!storage/media/.gitkeep
+test-results
+playwright-report
+.DS_Store

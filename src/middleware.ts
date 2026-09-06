@@ -34,7 +34,15 @@ export function middleware(request: NextRequest) {
   }
 
   // Subdomain / custom domain: the whole host is one site.
-  if (first === "_next" || first === "media" || first === "api" || pathname === "/favicon.ico" || pathname === "/robots.txt" || pathname === "/sitemap.xml") {
+  if (pathname === "/robots.txt" || pathname === "/sitemap.xml") {
+    const url = request.nextUrl.clone();
+    url.pathname = `/s/${route.site}${pathname}`;
+    const res = NextResponse.rewrite(url);
+    res.headers.set("x-tenant-mode", route.mode);
+    res.headers.set("x-tenant-site", route.site);
+    return res;
+  }
+  if (first === "_next" || first === "media" || first === "api" || pathname === "/favicon.ico") {
     // /api/site/* (form submissions, analytics) and media are shared infrastructure; everything else under /api is platform-only.
     if (first === "api" && !pathname.startsWith("/api/site/")) {
       return new NextResponse("Not found", { status: 404 });

@@ -55,4 +55,6 @@ export const RESERVED_TOP_LEVEL = new Set([
   "health",
   "portal",
   "s",
+  "q",
+  "i",
 ]);

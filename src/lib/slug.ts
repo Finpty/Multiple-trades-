@@ -36,6 +36,8 @@ export const RESERVED_SLUGS = new Set([
   "portal",
   "preview",
   "s",
+  "q",
+  "i",
 ]);
 
 export function isReservedSlug(slug: string): boolean {

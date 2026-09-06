@@ -403,3 +403,30 @@ export function serviceSeo(service: Pick<Service, "seo">): ServiceSeo {
 export function serviceGallery(service: Pick<Service, "gallery">): string[] {
   return asArray<unknown>(service.gallery).filter((x): x is string => typeof x === "string");
 }
+
+/** Service areas for the checkbox list in the service editor. */
+export async function listServiceAreaOptions(db: DbClient, businessId: string): Promise<Array<{ id: string; name: string; type: string; parentId: string | null; isEnabled: boolean }>> {
+  return db.serviceArea.findMany({ where: { businessId }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { id: true, name: true, type: true, parentId: true, isEnabled: true } });
+}
+
+/** Services flattened for checkbox lists (projects, materials), ordered parent → children. */
+export async function listServiceOptions(db: DbClient, businessId: string): Promise<Array<{ id: string; name: string; parentId: string | null; depth: number }>> {
+  const rows = await db.service.findMany({ where: { businessId }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { id: true, name: true, parentId: true } });
+  const ids = new Set(rows.map((r) => r.id));
+  const byParent = new Map<string | null, typeof rows>();
+  for (const r of rows) {
+    const key = r.parentId && ids.has(r.parentId) ? r.parentId : null;
+    byParent.set(key, [...(byParent.get(key) ?? []), r]);
+  }
+  const out: Array<{ id: string; name: string; parentId: string | null; depth: number }> = [];
+  const walk = (parentId: string | null, depth: number, seen: Set<string>) => {
+    for (const r of byParent.get(parentId) ?? []) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      out.push({ id: r.id, name: r.name, parentId: r.parentId, depth });
+      walk(r.id, depth + 1, seen);
+    }
+  };
+  walk(null, 0, new Set());
+  return out;
+}

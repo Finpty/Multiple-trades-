@@ -44,3 +44,48 @@ export async function loadSystemPage(ctx: SiteContext, systemKey: string): Promi
   if (!page) return null;
   return loadPageByPath(ctx, page.slug ? page.slug.split("/") : []);
 }
+
+/**
+ * Builds an in-memory page from block seeds so detail pages can reuse the
+ * block registry (e.g. embed the quote form) without a database row.
+ */
+export function syntheticPage(ctx: SiteContext, key: string, title: string, sections: Array<{ type: string; props: Record<string, unknown>; settings?: Record<string, unknown> }>): RenderablePage {
+  const now = new Date();
+  const page: Page = {
+    id: `synthetic-${key}`,
+    businessId: ctx.business.id,
+    parentId: null,
+    slug: key,
+    title,
+    kind: "SYSTEM",
+    systemKey: null,
+    templateKey: "default",
+    status: "PUBLISHED",
+    audience: "PUBLIC",
+    showInNav: false,
+    sortOrder: 0,
+    seo: {},
+    settings: {},
+    published: null,
+    publishedAt: now,
+    scheduledAt: null,
+    archivedAt: null,
+    createdByUserId: null,
+    updatedByUserId: null,
+    deletedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  return {
+    page,
+    isDraft: ctx.preview,
+    snapshot: {
+      title,
+      seo: {},
+      settings: {},
+      sections: sections.map((s, i) => ({ id: `${page.id}-${i}`, type: s.type, props: s.props, settings: s.settings ?? {}, isHidden: false })),
+      version: 0,
+      publishedAt: now.toISOString(),
+    },
+  };
+}

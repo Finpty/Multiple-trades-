@@ -108,8 +108,11 @@ export function coerceFieldValues(defs: FieldDefinitionView[], raw: Record<strin
 }
 
 /** Persists values for an entity (rows + mirrored jsonb on the entity when a mirror updater is given). */
+/** Minimal structural type so both transaction clients and RLS-scoped clients are accepted without deep generic comparison. */
+type FieldValueWriter = { customFieldValue: { upsert: (args: Prisma.CustomFieldValueUpsertArgs) => Promise<unknown> } };
+
 export async function saveFieldValues(
-  tx: Prisma.TransactionClient | TenantDb,
+  tx: FieldValueWriter,
   businessId: string,
   entityType: FieldEntityType,
   entityId: string,

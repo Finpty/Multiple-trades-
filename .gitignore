@@ -13,3 +13,4 @@ storage/media/*
 test-results
 playwright-report
 .DS_Store
+tsconfig.tsbuildinfo

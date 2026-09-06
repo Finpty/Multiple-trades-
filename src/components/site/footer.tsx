@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Facebook, Globe, Instagram, Linkedin, MapPin, Youtube } from "lucide-react";
+import { Globe, MapPin } from "lucide-react";
 import { siteHref, type SiteContext } from "@/lib/tenant/resolve";
 import type { ThemeTokens } from "@/lib/theme/tokens";
 import { tenantDb } from "@/lib/db";
@@ -10,7 +10,6 @@ import { listAreaPages } from "@/lib/site/areas";
 import { loadPrimaryLocation, normaliseOpeningHours, socialLinks } from "@/lib/site/seo";
 import { resolveMenu } from "./header";
 
-const SOCIAL_ICONS: Record<string, React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>> = { facebook: Facebook, instagram: Instagram, linkedin: Linkedin, youtube: Youtube };
 
 function socialLabel(key: string): string {
   return key.replace(/[_-]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
@@ -53,11 +52,11 @@ export async function SiteFooter({ ctx, tokens }: { ctx: SiteContext; tokens: Th
           {social.length > 0 && (
             <ul className="mt-4 flex flex-wrap gap-2" aria-label="Social links">
               {social.map((s) => {
-                const Icon = SOCIAL_ICONS[s.key.toLowerCase()] ?? Globe;
                 return (
                   <li key={s.key}>
-                    <a href={s.url} target="_blank" rel="noopener noreferrer" aria-label={socialLabel(s.key)} title={socialLabel(s.key)} className="inline-flex h-9 w-9 items-center justify-center rounded-full border transition hover:opacity-70" style={{ borderColor: "var(--color-border)" }}>
-                      <Icon className="h-4 w-4" aria-hidden />
+                    <a href={s.url} target="_blank" rel="noopener noreferrer" aria-label={socialLabel(s.key)} title={socialLabel(s.key)} className="inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:opacity-70" style={{ borderColor: "var(--color-border)" }}>
+                      <Globe className="h-3.5 w-3.5" aria-hidden />
+                      {socialLabel(s.key)}
                     </a>
                   </li>
                 );

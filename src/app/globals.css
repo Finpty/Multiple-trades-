@@ -162,4 +162,15 @@ select.site-input { appearance: none; background-image: url("data:image/svg+xml,
 
 /* Section backgrounds that set a dark text context */
 [data-section-type][style*="--color-primary"] .site-card, .site-on-dark .site-card { color: var(--color-text); }
+
+/* Section containers (the section wrapper adds these; primitives/Container constrains width, so these stay layout-neutral) */
+.site-container { width: 100%; }
+.site-container-narrow, .site-container-wide { width: 100%; }
+
+/* Page header / hero full-bleed contexts */
+.site-on-dark { color: #fff; }
+.site-on-dark .site-eyebrow { color: inherit; opacity: 0.85; }
+
+/* Utility: line clamp used by cards */
+.line-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 /* === end site blocks (D1) === */

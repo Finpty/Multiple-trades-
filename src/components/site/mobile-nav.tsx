@@ -1,8 +1,12 @@
 "use client";
 
 import * as React from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { ChevronDown, Menu, Phone, X } from "lucide-react";
+
+/** Element id of the overlay mount point rendered by the site layout. */
+export const OVERLAY_ROOT_ID = "site-overlay-root";
 
 export interface MobileNavItem {
   id: string;
@@ -20,6 +24,13 @@ export function MobileNav({ items, cta, phone, brand, logoUrl }: { items: Mobile
   const [open, setOpen] = React.useState(false);
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
+  // The sticky header uses backdrop-filter, which would make it the containing
+  // block for the fixed panel; portal into the overlay root inside .site-root
+  // so the panel covers the viewport and still inherits the theme variables.
+  const [overlayRoot, setOverlayRoot] = React.useState<HTMLElement | null>(null);
+  React.useEffect(() => {
+    setOverlayRoot(document.getElementById(OVERLAY_ROOT_ID) ?? document.body);
+  }, []);
 
   React.useEffect(() => {
     if (!open) return;
@@ -42,6 +53,7 @@ export function MobileNav({ items, cta, phone, brand, logoUrl }: { items: Mobile
         <Menu className="h-5 w-5" aria-hidden />
       </button>
 
+      {overlayRoot && createPortal(
       <div className={`fixed inset-0 z-50 md:hidden ${open ? "" : "pointer-events-none"}`} aria-hidden={!open}>
         <div className={`absolute inset-0 bg-black/40 transition-opacity duration-200 ${open ? "opacity-100" : "opacity-0"}`} onClick={() => setOpen(false)} />
         <div
@@ -114,7 +126,8 @@ export function MobileNav({ items, cta, phone, brand, logoUrl }: { items: Mobile
             </div>
           )}
         </div>
-      </div>
+      </div>,
+      overlayRoot)}
     </>
   );
 }

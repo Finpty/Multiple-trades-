@@ -4,7 +4,7 @@ import { getCurrentSession } from "@/lib/auth/session";
 import { getBusinessAccess } from "@/lib/authz";
 import { loadSiteContext, publicSiteUrl, siteHref, type SiteContext } from "@/lib/tenant/resolve";
 import type { TenantMode } from "@/lib/tenant/routing";
-import { prisma, tenantDb } from "@/lib/db";
+import { platformDb, prisma, tenantDb } from "@/lib/db";
 import { asObject } from "@/lib/json";
 import { EDITOR_PARAM, PREVIEW_PARAM } from "@/lib/editor/protocol";
 import { DEFAULT_THEME_TOKENS, mergeTokens, type ThemeTokens } from "@/lib/theme/tokens";
@@ -25,7 +25,7 @@ export async function resolveSiteRequest(site: string, searchParams: Record<stri
     const { user } = await getCurrentSession();
     if (user) {
       const business = mode === "domain"
-        ? (await prisma.businessDomain.findUnique({ where: { hostname: site.toLowerCase() }, select: { businessId: true } }))?.businessId
+        ? (await platformDb.businessDomain.findUnique({ where: { hostname: site.toLowerCase() }, select: { businessId: true } }))?.businessId // hostname → business is a platform-level lookup (RLS table)
         : (await prisma.business.findUnique({ where: { slug: site.toLowerCase() }, select: { id: true } }))?.id;
       if (business) {
         const access = await getBusinessAccess(user.id, business);
@@ -140,9 +140,11 @@ export async function applySiteRedirects(ctx: SiteContext, path: string, searchP
   const search = query ? `?${query}` : "";
 
   if (ctx.mode === "domain") {
-    const domain = await prisma.businessDomain.findUnique({ where: { hostname: ctx.hostname.toLowerCase() } });
-    if (domain && domain.businessId === ctx.business.id && domain.redirectToDomainId && domain.verificationStatus === "VERIFIED") {
-      const target = await prisma.businessDomain.findFirst({ where: { id: domain.redirectToDomainId, businessId: ctx.business.id, verificationStatus: "VERIFIED" } });
+    // business_domains is a tenant table (RLS): read it through the tenant-scoped client.
+    const db = tenantDb(ctx.business.id);
+    const domain = await db.businessDomain.findFirst({ where: { businessId: ctx.business.id, hostname: ctx.hostname.toLowerCase() } });
+    if (domain && domain.redirectToDomainId && domain.verificationStatus === "VERIFIED") {
+      const target = await db.businessDomain.findFirst({ where: { id: domain.redirectToDomainId, businessId: ctx.business.id, verificationStatus: "VERIFIED" } });
       if (target && target.hostname !== domain.hostname) {
         const url = `https://${target.hostname}${current === "/" ? "" : current}${search}`;
         if (domain.redirectType === 302 || domain.redirectType === 307) redirect(url);
@@ -155,7 +157,9 @@ export async function applySiteRedirects(ctx: SiteContext, path: string, searchP
   const match = rows.find((r) => normalisePath(r.fromPath) === current);
   if (!match) return;
   if (normalisePath(match.toPath) === current) return; // never loop on itself
-  const target = /^(https?:)?\/\//i.test(match.toPath) ? match.toPath : siteHref(ctx, match.toPath);
+  const base = /^(https?:)?\/\//i.test(match.toPath) ? match.toPath : siteHref(ctx, match.toPath);
+  // Preserve the visitor's query string unless the rule supplies its own.
+  const target = search && !base.includes("?") ? `${base}${search}` : base;
   if (match.statusCode === 302 || match.statusCode === 307) redirect(target);
   permanentRedirect(target);
 }

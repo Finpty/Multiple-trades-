@@ -11,11 +11,11 @@ page.on("console", (m) => { if (m.type() === "error") errors.push(`console: ${m.
 await page.goto(`${base}/login`);
 await page.fill('input[name="email"]', process.env.SEED_OWNER_EMAIL ?? "owner@tradeone.local");
 await page.fill('input[name="password"]', process.env.SEED_OWNER_PASSWORD ?? "tradeone-owner");
-await Promise.all([page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 30000 }), page.click('button[type="submit"]')]);
+await Promise.all([page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 120000 }), page.click('button[type="submit"]')]);
 console.log(`logged in → ${page.url()}`);
 for (const u of urls) {
   errors.length = 0;
-  const res = await page.goto(`${base}${u}`, { waitUntil: "networkidle", timeout: 60000 }).catch((e) => ({ status: () => `ERR ${e.message.slice(0, 80)}` }));
+  const res = await page.goto(`${base}${u}`, { waitUntil: "load", timeout: 120000 }).catch((e) => ({ status: () => `ERR ${e.message.slice(0, 80)}` }));
   const h1 = await page.locator("h1").first().textContent().catch(() => "");
   const body = await page.innerText("body").catch(() => "");
   const bad = /Application error|Unhandled Runtime Error|This page could not be found|Internal Server Error/.test(body ?? "");

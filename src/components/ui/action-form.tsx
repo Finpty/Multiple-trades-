@@ -6,7 +6,10 @@ import { useRouter } from "next/navigation";
 import type { ActionResult } from "@/lib/actions";
 import { Alert } from "./index";
 
-type FormAction<T> = (prev: ActionResult<T> | undefined, formData: FormData) => Promise<ActionResult<T>>;
+// `prev` is intentionally loose: server actions declare their own previous-state type and
+// contravariance would otherwise reject every action whose data type differs from T.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type FormAction<T> = (prev: any, formData: FormData) => Promise<ActionResult<T>>;
 
 /**
  * Client wrapper for server actions returning ActionResult. Shows errors,

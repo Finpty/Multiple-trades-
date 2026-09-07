@@ -11,7 +11,9 @@ export type AutomationAction =
   | { type: "create_project_from_quote" }
   | { type: "update_lead_status"; status: string }
   | { type: "request_review"; delayDays?: number }
-  | { type: "log_message"; body: string };
+  | { type: "log_message"; body: string }
+  | { type: "assign_lead"; userId: string }
+  | { type: "send_sms"; to: string; body: string };
 
 export const AUTOMATION_ACTION_TYPES: Array<{ type: AutomationAction["type"]; label: string; description: string }> = [
   { type: "create_task", label: "Create task", description: "Create a follow-up task, optionally assigned." },
@@ -21,6 +23,8 @@ export const AUTOMATION_ACTION_TYPES: Array<{ type: AutomationAction["type"]; la
   { type: "update_lead_status", label: "Update lead status", description: "Move the lead to a given status." },
   { type: "request_review", label: "Request review", description: "Email the customer asking for a review." },
   { type: "log_message", label: "Log note", description: "Add an internal note to the record timeline." },
+  { type: "assign_lead", label: "Assign lead", description: "Assign the lead from this event to a team member." },
+  { type: "send_sms", label: "Send SMS", description: "Queue a text message to a phone number or {{phone}} placeholder (delivered once an SMS provider is connected)." },
 ];
 
 export interface ActionContext {
@@ -118,6 +122,44 @@ export async function executeAutomationAction(action: AutomationAction, ctx: Act
         },
       });
       return { messageId: m.id };
+    }
+    case "assign_lead": {
+      if (typeof payload.leadId !== "string") return { skipped: "no lead" };
+      if (!action.userId) return { skipped: "no user" };
+      const lead = await db.lead.findFirst({ where: { id: payload.leadId, businessId: ctx.businessId }, select: { id: true, assignedToUserId: true } });
+      if (!lead) return { skipped: "lead not found" };
+      await db.lead.update({ where: { id: lead.id }, data: { assignedToUserId: action.userId } });
+      await platformDb.notification.create({
+        data: { userId: action.userId, businessId: ctx.businessId, type: "lead.assigned", title: "A lead was assigned to you", body: "Assigned automatically by an automation rule.", data: toJson({ leadId: lead.id, ruleId: ctx.ruleId }) },
+      }).catch(() => undefined);
+      return { leadId: lead.id, assignedToUserId: action.userId, previous: lead.assignedToUserId };
+    }
+    case "send_sms": {
+      // No SMS provider is wired in; the message is recorded as queued so it is
+      // visible on the customer timeline and can be delivered later. Never throws.
+      let to = interpolate(action.to ?? "", payload).trim();
+      const customerId = typeof payload.customerId === "string" ? payload.customerId : null;
+      const leadId = typeof payload.leadId === "string" ? payload.leadId : null;
+      if (!to && (customerId || leadId)) {
+        const contact = customerId
+          ? await db.customer.findFirst({ where: { id: customerId, businessId: ctx.businessId }, select: { phone: true } })
+          : await db.lead.findFirst({ where: { id: leadId!, businessId: ctx.businessId }, select: { phone: true } });
+        to = contact?.phone?.trim() ?? "";
+      }
+      const m = await db.message.create({
+        data: {
+          businessId: ctx.businessId,
+          customerId,
+          leadId,
+          channel: "SMS",
+          direction: "OUTBOUND",
+          body: interpolate(action.body ?? "", payload),
+          toAddress: to || null,
+          status: "queued",
+          metadata: toJson({ automationRuleId: ctx.ruleId, eventId: ctx.event.id, reason: to ? "no_sms_provider" : "no_recipient" }),
+        },
+      });
+      return { messageId: m.id, queued: true, to: to || null };
     }
     default:
       return { skipped: "unknown action" };

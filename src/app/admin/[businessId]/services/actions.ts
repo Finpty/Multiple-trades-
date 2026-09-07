@@ -46,7 +46,7 @@ async function collectCustomFields(db: Awaited<ReturnType<typeof requireBusiness
 }
 
 export async function saveServiceAction(_prev: ActionResult<{ id: string; created: boolean }> | undefined, formData: FormData): Promise<ActionResult<{ id: string; created: boolean }>> {
-  return runAction(async () => {
+  return runAction<{ id: string; created: boolean }>(async () => {
     const businessId = idFrom(formData.get("businessId"), "business");
     const ctx = await requireBusinessAccess(businessId, "services.manage", { throwOnly: true });
     const obj = formToObject(formData);

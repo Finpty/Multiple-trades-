@@ -1,6 +1,6 @@
 import { cache } from "react";
 import type { Business, BusinessTheme, NavigationMenu } from "@prisma/client";
-import { prisma, tenantDb } from "@/lib/db";
+import { platformDb, prisma, tenantDb } from "@/lib/db";
 
 export type { TenantMode, ResolvedRoute } from "./routing";
 export { resolveRouteFromRequest, RESERVED_TOP_LEVEL } from "./routing";
@@ -26,7 +26,9 @@ export interface SiteContext {
 export const loadSiteContext = cache(async (site: string, mode: TenantMode, opts: { preview?: boolean } = {}): Promise<SiteContext | null> => {
   let business: Business | null = null;
   if (mode === "domain") {
-    const domain = await prisma.businessDomain.findUnique({ where: { hostname: site.toLowerCase() }, include: { business: true } });
+    // business_domains is a tenant table (forced RLS); the hostname → business lookup IS the tenant
+    // boundary, so it must run with bypass. Nothing else here reads across tenants.
+    const domain = await platformDb.businessDomain.findUnique({ where: { hostname: site.toLowerCase() }, include: { business: true } });
     if (!domain) return null;
     if (domain.verificationStatus !== "VERIFIED" && process.env.NODE_ENV === "production") return null;
     business = domain.business;

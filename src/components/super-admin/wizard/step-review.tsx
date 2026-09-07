@@ -3,7 +3,7 @@
 import { Button, Checkbox, Description, cn } from "@/components/ui";
 import type { StepProps } from "./wizard";
 
-export function StepReview({ state, catalog, onGoTo, onSubmit, submitting }: StepProps) {
+export function StepReview({ state, patch, catalog, onGoTo, onSubmit, submitting }: StepProps) {
   const industry = catalog.industries.find((i) => i.id === state.industryId);
   const family = catalog.designFamilies.find((f) => f.slug === state.designFamilySlug) ?? catalog.designFamilies[0];
   const d = state.details;

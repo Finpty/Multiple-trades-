@@ -27,30 +27,21 @@ export function middleware(request: NextRequest) {
     }
     const url = request.nextUrl.clone();
     url.pathname = `/s/${route.site}${route.path === "/" ? "" : route.path}`;
-    const res = NextResponse.rewrite(url);
-    res.headers.set("x-tenant-mode", "path");
-    res.headers.set("x-tenant-site", route.site);
-    return res;
+    return rewriteWithTenant(request, url, "path", route.site);
   }
 
   // Subdomain / custom domain: the whole host is one site.
   if (pathname === "/robots.txt" || pathname === "/sitemap.xml") {
     const url = request.nextUrl.clone();
     url.pathname = `/s/${route.site}${pathname}`;
-    const res = NextResponse.rewrite(url);
-    res.headers.set("x-tenant-mode", route.mode);
-    res.headers.set("x-tenant-site", route.site);
-    return res;
+    return rewriteWithTenant(request, url, route.mode, route.site);
   }
   if (first === "_next" || first === "media" || first === "api" || pathname === "/favicon.ico") {
     // /api/site/* (form submissions, analytics) and media are shared infrastructure; everything else under /api is platform-only.
     if (first === "api" && !pathname.startsWith("/api/site/")) {
       return new NextResponse("Not found", { status: 404 });
     }
-    const res = NextResponse.next();
-    res.headers.set("x-tenant-mode", route.mode);
-    res.headers.set("x-tenant-site", route.site);
-    return res;
+    return NextResponse.next({ request: { headers: tenantHeaders(request, route.mode, route.site) } });
   }
   if (RESERVED_TOP_LEVEL.has(first)) {
     return new NextResponse("Not found", { status: 404 });
@@ -58,9 +49,21 @@ export function middleware(request: NextRequest) {
   const url = request.nextUrl.clone();
   url.pathname = `/s/${route.site}${route.path === "/" ? "" : route.path}`;
   url.search = search;
-  const res = NextResponse.rewrite(url);
-  res.headers.set("x-tenant-mode", route.mode);
-  res.headers.set("x-tenant-site", route.site);
+  return rewriteWithTenant(request, url, route.mode, route.site);
+}
+
+/** Tenant context travels on the REQUEST headers so server components can read it with headers(). */
+function tenantHeaders(request: NextRequest, mode: string, site: string): Headers {
+  const h = new Headers(request.headers);
+  h.set("x-tenant-mode", mode);
+  h.set("x-tenant-site", site);
+  return h;
+}
+
+function rewriteWithTenant(request: NextRequest, url: URL, mode: string, site: string) {
+  const res = NextResponse.rewrite(url, { request: { headers: tenantHeaders(request, mode, site) } });
+  res.headers.set("x-tenant-mode", mode);
+  res.headers.set("x-tenant-site", site);
   return res;
 }
 

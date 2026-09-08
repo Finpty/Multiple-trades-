@@ -10,23 +10,9 @@ import { asArray, toJson } from "@/lib/json";
  * extended with pageId / mega / newTab so the site renderer (resolveMenu) can
  * resolve every item without changes. Depth is limited to one level of nesting.
  */
-export const NAV_ITEM_TYPES = ["page", "services", "link", "dropdown"] as const;
-export type NavItemType = (typeof NAV_ITEM_TYPES)[number];
-
-export interface NavItem extends NavItemSeed {
-  type?: NavItemType;
-  pageId?: string;
-  mega?: boolean;
-  newTab?: boolean;
-  children?: NavItem[];
-}
-
-export const NAV_ITEM_TYPE_META: Record<NavItemType, { label: string; description: string }> = {
-  page: { label: "Page", description: "Links to one of your pages." },
-  services: { label: "Services", description: "Links to the services page; can list services in a mega menu." },
-  link: { label: "Custom link", description: "Any URL, phone number or email." },
-  dropdown: { label: "Dropdown", description: "A label that opens a list of child items." },
-};
+export { NAV_ITEM_TYPES, NAV_ITEM_TYPE_META } from "@/lib/website/nav-types";
+export type { NavItem, NavItemType } from "@/lib/website/nav-types";
+import { NAV_ITEM_TYPES, type NavItem, type NavItemType } from "@/lib/website/nav-types";
 
 export const MENU_DEFINITIONS: Array<{ key: string; name: string; description: string }> = [
   { key: "header", name: "Main navigation", description: "Shown in the site header. The last item is styled as the call-to-action button." },

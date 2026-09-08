@@ -21,12 +21,10 @@ export default async function UsersPage({ params }: { params: Promise<{ business
         <CardHeader title="Invite someone" description="They receive an email to set a password (new users) or immediate access (existing users)." />
         <CardBody>
           <ActionForm action={inviteAction.bind(null, businessId)} className="grid gap-3 sm:grid-cols-[1fr_1fr_200px_auto] items-end" resetOnSuccess>
-            {({ fieldErrors }) => (<>
-              <Field label="Email" error={fieldErrors.email}><Input name="email" type="email" required /></Field>
-              <Field label="Name"><Input name="name" /></Field>
-              <Field label="Role"><Select name="roleId" defaultValue={roles.find((r) => r.key === "business_staff")?.id ?? roles[0]?.id}>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select></Field>
-              <SubmitButton>Send invite</SubmitButton>
-            </>)}
+            <Field label="Email"><Input name="email" type="email" required /></Field>
+            <Field label="Name"><Input name="name" /></Field>
+            <Field label="Role"><Select name="roleId" defaultValue={roles.find((r) => r.key === "business_staff")?.id ?? roles[0]?.id}>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</Select></Field>
+            <SubmitButton>Send invite</SubmitButton>
           </ActionForm>
         </CardBody>
       </Card>

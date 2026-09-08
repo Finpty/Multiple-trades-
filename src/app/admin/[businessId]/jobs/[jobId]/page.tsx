@@ -259,17 +259,15 @@ async function TasksTab({ businessId, jobId, tz, members }: { businessId: string
         <CardHeader title="Add task" />
         <CardBody>
           <ActionForm action={addJobTaskAction} resetOnSuccess successMessage="Task added">
-            {({ fieldErrors }) => (
-              <div className="space-y-3">
+            <div className="space-y-3">
                 <input type="hidden" name="businessId" value={businessId} />
                 <input type="hidden" name="jobId" value={jobId} />
-                <Field label="Title" required error={fieldErrors.title}><Input name="title" required placeholder="Order materials" /></Field>
-                <Field label="Due" error={fieldErrors.dueAt}><Input type="datetime-local" name="dueAt" /></Field>
+                <Field label="Title" required><Input name="title" required placeholder="Order materials" /></Field>
+                <Field label="Due"><Input type="datetime-local" name="dueAt" /></Field>
                 <Field label="Assignee"><Select name="assignedToUserId" defaultValue=""><option value="">Unassigned</option>{members.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</Select></Field>
                 <Field label="Priority"><Select name="priority" defaultValue="0">{TASK_PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</Select></Field>
                 <SubmitButton pendingText="Adding…">Add task</SubmitButton>
-              </div>
-            )}
+            </div>
           </ActionForm>
         </CardBody>
       </Card>
@@ -304,14 +302,12 @@ async function NotesTab({ businessId, jobId, tz }: { businessId: string; jobId: 
         <CardHeader title="Add note" />
         <CardBody>
           <ActionForm action={addJobNoteAction} resetOnSuccess successMessage="Note added">
-            {({ fieldErrors }) => (
-              <div className="space-y-3">
+            <div className="space-y-3">
                 <input type="hidden" name="businessId" value={businessId} />
                 <input type="hidden" name="jobId" value={jobId} />
-                <Field label="Note" required error={fieldErrors.body}><Textarea name="body" rows={4} required placeholder="Site access via side gate…" /></Field>
+                <Field label="Note" required><Textarea name="body" rows={4} required placeholder="Site access via side gate…" /></Field>
                 <SubmitButton pendingText="Saving…">Add note</SubmitButton>
-              </div>
-            )}
+            </div>
           </ActionForm>
         </CardBody>
       </Card>

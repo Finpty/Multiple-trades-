@@ -43,6 +43,12 @@ export async function runCron(): Promise<{ ranAt: string; results: CronTaskResul
       return mod?.markOverdueInvoices ? mod.markOverdueInvoices() : { skipped: "module unavailable" };
     }),
   );
+  results.push(
+    await step("quotes.expire", async () => {
+      const mod = (await import("@/lib/operations/quotes").catch(() => null)) as { expireQuotes?: () => Promise<number> } | null;
+      return mod?.expireQuotes ? { expired: await mod.expireQuotes() } : { skipped: "module unavailable" };
+    }),
+  );
   results.push(await step("domains.recheck", () => recheckPendingDomains(50)));
   results.push(await step("sessions.purge", () => purgeExpiredSessions()));
   results.push(await step("rateLimits.purge", () => purgeExpiredRateLimits()));

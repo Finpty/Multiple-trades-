@@ -15,17 +15,8 @@ import { uniqueSlug } from "@/lib/slug";
 export type ProjectMaterialRow = { name: string; type: string; notes: string };
 export type ProjectSeo = { title?: string; description?: string; noindex?: boolean; socialImageId?: string | null };
 
-export const PROJECT_MEDIA_STAGES: Array<{ value: ProjectMediaStage; label: string; hint: string; kind: "IMAGE" | "VIDEO" }> = [
-  { value: "BEFORE", label: "Before", hint: "How the site looked before work started.", kind: "IMAGE" },
-  { value: "PROGRESS", label: "Progress", hint: "Work in progress — preparation, mid-install.", kind: "IMAGE" },
-  { value: "AFTER", label: "After", hint: "The finished result. These are shown first on the website.", kind: "IMAGE" },
-  { value: "VIDEO", label: "Video", hint: "Walkthroughs, time-lapses and clips.", kind: "VIDEO" },
-];
-
-export const PROJECT_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
-
-/** Generic fallback for material type suggestions; industries can extend it via terminology.materialTypes (comma-separated). */
-export const GENERIC_MATERIAL_TYPES = ["tile", "stone", "timber", "fixture", "fitting", "paint", "finish", "sealant", "adhesive", "grout", "pipe", "cable", "fabric", "glass", "metal", "other"];
+export { PROJECT_MEDIA_STAGES, PROJECT_STATUSES, GENERIC_MATERIAL_TYPES } from "@/lib/content/project-types";
+import { GENERIC_MATERIAL_TYPES, PROJECT_STATUSES } from "@/lib/content/project-types";
 
 export function materialTypeSuggestions(terminology: Record<string, unknown> | null | undefined): string[] {
   const raw = terminology?.materialTypes ?? terminology?.material_types;

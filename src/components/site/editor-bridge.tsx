@@ -1,15 +1,53 @@
 "use client";
 
 import * as React from "react";
-import { EDITOR_SOURCE, isEditorMessage, type EditorToSiteMessage, type SiteToEditorMessage } from "@/lib/editor/protocol";
+import { EDITOR_SOURCE, isEditorMessage, type EditorMode, type EditorToSiteMessage, type SiteToEditorMessage, type ThemePreviewPayload } from "@/lib/editor/protocol";
+
+/** Applies a draft theme pushed by the brand & theme builder without a reload. */
+function applyThemePreview(theme: ThemePreviewPayload) {
+  const root = document.querySelector<HTMLElement>(".site-root");
+  if (!root) return;
+  root.style.cssText = theme.cssVars;
+  root.dataset.mode = theme.mode;
+  root.dataset.animation = theme.animation;
+  const vars = document.getElementById("to-theme-vars");
+  if (vars) vars.textContent = `.site-root{${theme.cssVars};background:var(--color-background);color:var(--color-text);font-family:var(--font-body)}`;
+  const custom = document.getElementById("to-theme-custom");
+  if (custom) custom.textContent = theme.customCss;
+  let fonts = document.getElementById("to-theme-fonts") as HTMLLinkElement | null;
+  if (theme.fontsUrl) {
+    if (!fonts) {
+      fonts = document.createElement("link");
+      fonts.id = "to-theme-fonts";
+      fonts.rel = "stylesheet";
+      document.head.appendChild(fonts);
+    }
+    if (fonts.href !== theme.fontsUrl) fonts.href = theme.fontsUrl;
+  } else if (fonts) fonts.remove();
+}
 
 /**
  * Runs inside the site preview iframe when the live editor is open.
  * Implements the click-to-select / inline-text-edit side of the protocol.
+ * In "theme" mode it only listens for draft theme updates (no outlines).
  */
-export function EditorBridge({ pageId }: { pageId: string | null }) {
+export function EditorBridge({ pageId, mode = "edit" }: { pageId: string | null; mode?: EditorMode }) {
   React.useEffect(() => {
     const post = (msg: SiteToEditorMessage) => window.parent?.postMessage(msg, "*");
+    if (mode === "theme") {
+      const onThemeMessage = (e: MessageEvent) => {
+        if (!isEditorMessage(e.data)) return;
+        const msg = e.data as EditorToSiteMessage;
+        if (msg.type === "setTheme") applyThemePreview(msg.theme);
+        if (msg.type === "reload") window.location.reload();
+      };
+      const style = document.createElement("style");
+      style.textContent = "a[href]{pointer-events:none}";
+      document.head.appendChild(style);
+      window.addEventListener("message", onThemeMessage);
+      post({ source: EDITOR_SOURCE, type: "ready", pageId });
+      return () => { window.removeEventListener("message", onThemeMessage); style.remove(); };
+    }
     const sections = () => Array.from(document.querySelectorAll<HTMLElement>("[data-section-id]"));
     const reportSections = () => post({ source: EDITOR_SOURCE, type: "sections", sections: sections().map((el) => ({ id: el.dataset.sectionId!, type: el.dataset.sectionType ?? "", top: el.getBoundingClientRect().top + window.scrollY, height: el.offsetHeight })) });
 
@@ -74,6 +112,7 @@ export function EditorBridge({ pageId }: { pageId: string | null }) {
       if (msg.type === "select") select(msg.sectionId);
       if (msg.type === "scrollTo") document.querySelector<HTMLElement>(`[data-section-id="${msg.sectionId}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
       if (msg.type === "reload") window.location.reload();
+      if (msg.type === "setTheme") applyThemePreview(msg.theme);
     };
 
     document.addEventListener("click", onClick, true);
@@ -91,6 +130,6 @@ export function EditorBridge({ pageId }: { pageId: string | null }) {
       window.removeEventListener("resize", reportSections);
       style.remove();
     };
-  }, [pageId]);
+  }, [pageId, mode]);
   return null;
 }

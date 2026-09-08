@@ -35,15 +35,15 @@ export async function generateMetadata({ params, searchParams }: { params: Promi
 export default async function SitePage({ params, searchParams }: { params: Promise<Params>; searchParams: Promise<Search> }) {
   const { site, path = [] } = await params;
   const search = await searchParams;
-  const { ctx, editor } = await resolveSiteRequest(site, search);
+  const { ctx, editor, editorMode } = await resolveSiteRequest(site, search);
   if (!ctx) notFound();
   await applySiteRedirects(ctx, pathOf(path), search);
   const page = await loadPageByPath(ctx, path);
   if (!page) notFound();
   return (
     <>
-      <SectionRenderer page={page} ctx={ctx} editor={editor} />
-      {editor && <EditorBridge pageId={page.page.id} />}
+      <SectionRenderer page={page} ctx={ctx} editor={editor && editorMode === "edit"} />
+      {editor && editorMode && <EditorBridge pageId={page.page.id} mode={editorMode} />}
     </>
   );
 }

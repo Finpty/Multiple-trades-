@@ -13,6 +13,7 @@ export interface DomainEventPayloads {
   "business.archived": { businessId: string };
   "page.published": { businessId: string; pageId: string; slug: string; version: number };
   "page.restored": { businessId: string; pageId: string; version: number };
+  "theme.restored": { businessId: string; version: number };
   "theme.published": { businessId: string };
   "domain.added": { businessId: string; domainId: string; hostname: string };
   "domain.verified": { businessId: string; domainId: string; hostname: string };
@@ -62,6 +63,7 @@ export const DOMAIN_EVENT_TYPES = [
   "business.archived",
   "page.published",
   "page.restored",
+  "theme.restored",
   "theme.published",
   "domain.added",
   "domain.verified",

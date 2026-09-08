@@ -90,35 +90,7 @@ export const COUNTRIES: Array<{ code: string; label: string }> = [
 
 export const LOCALES = ["en-AU", "en-NZ", "en-US", "en-GB", "en-CA", "en-IE", "en-SG", "en-IN", "en-ZA", "de-DE", "fr-FR", "es-ES", "it-IT", "nl-NL", "sv-SE", "pt-BR", "ja-JP", "ms-MY", "id-ID"];
 
-export const GOOGLE_FONTS = [
-  "Inter",
-  "Roboto",
-  "Open Sans",
-  "Lato",
-  "Montserrat",
-  "Poppins",
-  "Nunito",
-  "Work Sans",
-  "DM Sans",
-  "Manrope",
-  "Source Sans 3",
-  "Space Grotesk",
-  "Plus Jakarta Sans",
-  "Outfit",
-  "Raleway",
-  "Oswald",
-  "Archivo Black",
-  "Bebas Neue",
-  "Playfair Display",
-  "Libre Baskerville",
-  "Cormorant Garamond",
-  "Fraunces",
-  "Merriweather",
-  "Lora",
-  "EB Garamond",
-];
-
-export const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800, 900];
+export { GOOGLE_FONTS, FONT_WEIGHTS, THEME_ENUMS, COLOR_KEYS } from "@/lib/theme/options";
 
 export const PRICING_METHODS: Array<{ value: string; label: string }> = [
   { value: "QUOTE", label: "Quote on request" },
@@ -145,26 +117,4 @@ export const AREA_TYPES: Array<{ value: string; label: string }> = [
   { value: "CITY", label: "City" },
   { value: "SUBURB", label: "Suburb" },
   { value: "POSTCODE", label: "Postcode" },
-];
-
-export const THEME_ENUMS = {
-  radius: ["none", "sm", "md", "lg", "xl"],
-  buttonStyle: ["solid", "outline", "pill", "ghost"],
-  borderStyle: ["none", "subtle", "strong"],
-  imageStyle: ["natural", "warm", "cinematic", "muted", "duotone"],
-  animation: ["none", "subtle", "medium", "bold"],
-  mode: ["light", "dark"],
-  spacing: ["compact", "comfortable", "spacious"],
-  tone: ["professional", "friendly", "premium", "bold", "technical"],
-} as const;
-
-export const COLOR_KEYS: Array<{ key: "primary" | "secondary" | "accent" | "background" | "surface" | "text" | "muted" | "border"; label: string; hint: string }> = [
-  { key: "primary", label: "Primary", hint: "Buttons, links, headings" },
-  { key: "secondary", label: "Secondary", hint: "Supporting elements" },
-  { key: "accent", label: "Accent", hint: "Highlights & calls to action" },
-  { key: "background", label: "Background", hint: "Page background" },
-  { key: "surface", label: "Surface", hint: "Cards & alternating sections" },
-  { key: "text", label: "Text", hint: "Body copy" },
-  { key: "muted", label: "Muted", hint: "Secondary text" },
-  { key: "border", label: "Border", hint: "Dividers & outlines" },
 ];

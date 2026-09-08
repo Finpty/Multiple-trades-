@@ -44,9 +44,11 @@ export default async function SiteLayout({ children, params }: { children: React
 
   return (
     <div className="site-root flex min-h-screen flex-col" data-mode={tokens.mode} data-animation={tokens.animation} style={{ cssText: tokensToStyleString(tokens) } as React.CSSProperties}>
-      {fonts && <link rel="stylesheet" href={fonts} />}
+      {fonts && <link id="to-theme-fonts" rel="stylesheet" href={fonts} />}
       {headTags.map((t, i) => (t.tag === "meta" ? <meta key={`h${i}`} {...t.attrs} /> : <link key={`h${i}`} {...t.attrs} />))}
-      <style>{`.site-root{${tokensToStyleString(tokens)};background:var(--color-background);color:var(--color-text);font-family:var(--font-body)}${SITE_CSS}${tokens.customCss ?? ""}`}</style>
+      <style id="to-theme-vars">{`.site-root{${tokensToStyleString(tokens)};background:var(--color-background);color:var(--color-text);font-family:var(--font-body)}`}</style>
+      <style>{SITE_CSS}</style>
+      <style id="to-theme-custom">{tokens.customCss ?? ""}</style>
       <JsonLd data={jsonLd} />
       <SiteHeader ctx={ctx} tokens={tokens} />
       <div className="site-content flex-1">{children}</div>

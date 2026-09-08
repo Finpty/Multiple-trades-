@@ -6,7 +6,7 @@ import { loadSiteContext, publicSiteUrl, siteHref, type SiteContext } from "@/li
 import type { TenantMode } from "@/lib/tenant/routing";
 import { platformDb, prisma, tenantDb } from "@/lib/db";
 import { asObject } from "@/lib/json";
-import { EDITOR_PARAM, PREVIEW_PARAM } from "@/lib/editor/protocol";
+import { EDITOR_PARAM, PREVIEW_PARAM, parseEditorMode, type EditorMode } from "@/lib/editor/protocol";
 import { DEFAULT_THEME_TOKENS, mergeTokens, type ThemeTokens } from "@/lib/theme/tokens";
 import { mediaUrls, type MediaUrlSet } from "@/lib/media/service";
 
@@ -15,11 +15,12 @@ import { mediaUrls, type MediaUrlSet } from "@/lib/media/service";
  * is only granted when the visitor has an authorised session for that
  * business; otherwise the params are ignored and the published site renders.
  */
-export async function resolveSiteRequest(site: string, searchParams: Record<string, string | string[] | undefined>): Promise<{ ctx: SiteContext | null; editor: boolean }> {
+export async function resolveSiteRequest(site: string, searchParams: Record<string, string | string[] | undefined>): Promise<{ ctx: SiteContext | null; editor: boolean; editorMode: EditorMode | null }> {
   const h = await headers();
   const mode = (h.get("x-tenant-mode") as TenantMode | null) ?? (site.includes(".") ? "domain" : "path");
   const wantsPreview = searchParams[PREVIEW_PARAM] === "draft";
-  const wantsEditor = searchParams[EDITOR_PARAM] === "1";
+  const editorMode = parseEditorMode(searchParams[EDITOR_PARAM]);
+  const wantsEditor = editorMode !== null;
   let preview = false;
   if (wantsPreview || wantsEditor) {
     const { user } = await getCurrentSession();
@@ -34,7 +35,7 @@ export async function resolveSiteRequest(site: string, searchParams: Record<stri
     }
   }
   const ctx = await loadSiteContext(site, mode, { preview });
-  return { ctx, editor: preview && wantsEditor };
+  return { ctx, editor: preview && wantsEditor, editorMode: preview ? editorMode : null };
 }
 
 /**
@@ -43,6 +44,13 @@ export async function resolveSiteRequest(site: string, searchParams: Record<stri
  * (draft business being previewed by an editor) it falls back to preview.
  */
 export async function resolveSiteLayout(site: string): Promise<SiteContext | null> {
+  const h = await headers();
+  const previewHeader = h.get("x-tenant-preview");
+  const editorHeader = h.get("x-tenant-editor");
+  if (previewHeader === "draft" || editorHeader) {
+    const previewed = await resolveSiteRequest(site, { [PREVIEW_PARAM]: previewHeader ?? undefined, [EDITOR_PARAM]: editorHeader ?? undefined });
+    if (previewed.ctx?.preview) return previewed.ctx;
+  }
   const { ctx } = await resolveSiteRequest(site, {});
   if (ctx) return ctx;
   return (await resolveSiteRequest(site, { [PREVIEW_PARAM]: "draft" })).ctx;

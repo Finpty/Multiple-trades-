@@ -57,6 +57,14 @@ function tenantHeaders(request: NextRequest, mode: string, site: string): Header
   const h = new Headers(request.headers);
   h.set("x-tenant-mode", mode);
   h.set("x-tenant-site", site);
+  // Layouts cannot read search params; the preview/editor intent travels as a header
+  // (still gated by an authorised session in resolveSiteRequest).
+  const preview = request.nextUrl.searchParams.get("__preview");
+  const editor = request.nextUrl.searchParams.get("__editor");
+  if (preview) h.set("x-tenant-preview", preview);
+  else h.delete("x-tenant-preview");
+  if (editor) h.set("x-tenant-editor", editor);
+  else h.delete("x-tenant-editor");
   return h;
 }
 

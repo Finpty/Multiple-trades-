@@ -10,6 +10,8 @@ import { publishBusiness, publishNavigation, publishPage, restorePageRevision, u
 import { NavItemsSchema, saveMenuDraft } from "@/lib/website/navigation";
 import { RedirectSchema, SeoDefaultsSchema, createRedirect, deleteRedirect, saveSeoDefaults, setRedirectActive, updateRedirect } from "@/lib/website/seo";
 import { isUuid } from "@/lib/ids";
+import { restoreThemeRevision, saveThemeDraft } from "@/lib/website/theme";
+import { publishTheme } from "@/lib/business/publish";
 
 const wp = (b: string) => `/admin/${b}/website`;
 
@@ -165,5 +167,34 @@ export async function redirectStateAction(businessId: string, redirectId: string
     else await setRedirectActive(ctx.db, businessId, redirectId, action === "enable", ctx.user.id);
     revalidatePath(`${wp(businessId)}/seo`);
     return ok(undefined);
+  });
+}
+
+/* ── brand & theme ─────────────────────────────────────────────────────────── */
+
+export async function saveThemeAction(businessId: string, input: { tokens: unknown; designFamilyId?: string | null }): Promise<ActionResult> {
+  return runAction(async () => {
+    const ctx = await requireBusinessAccess(businessId, "website.edit", { throwOnly: true });
+    await saveThemeDraft(ctx.db, businessId, input, ctx.user.id);
+    revalidatePath(wp(businessId), "layout");
+    return ok(undefined, "Theme draft saved");
+  });
+}
+
+export async function publishThemeAction(businessId: string): Promise<ActionResult> {
+  return runAction(async () => {
+    const ctx = await requireBusinessAccess(businessId, "website.publish", { throwOnly: true });
+    await publishTheme(businessId, { actorUserId: ctx.user.id });
+    revalidatePath(wp(businessId), "layout");
+    return ok(undefined, "Theme published");
+  });
+}
+
+export async function restoreThemeRevisionAction(businessId: string, version: number): Promise<ActionResult> {
+  return runAction(async () => {
+    const ctx = await requireBusinessAccess(businessId, "website.edit", { throwOnly: true });
+    await restoreThemeRevision(businessId, Math.trunc(version), { actorUserId: ctx.user.id });
+    revalidatePath(wp(businessId), "layout");
+    return ok(undefined, `Restored theme version ${version} into the draft. Publish to make it live.`);
   });
 }

@@ -1,7 +1,7 @@
 import path from "node:path";
 import sharp from "sharp";
 import type { Media, MediaKind, MediaVisibility } from "@prisma/client";
-import { tenantDb } from "@/lib/db";
+import { tenantDb, withTenantTransaction } from "@/lib/db";
 import { emitEvent } from "@/lib/events";
 import { recordAudit } from "@/lib/audit";
 import { toJson } from "@/lib/json";
@@ -122,12 +122,15 @@ export async function replaceMediaFile(businessId: string, mediaId: string, buff
   const db = tenantDb(businessId);
   const existing = await db.media.findUniqueOrThrow({ where: { id: mediaId } });
   const fresh = await uploadMedia({ businessId, buffer, mimeType, originalName, folderId: existing.folderId, visibility: existing.visibility, uploadedByUserId: actorUserId, altText: existing.altText, caption: existing.caption, title: existing.title });
-  // Move the new object's data onto the old record, then delete the temporary record and old objects.
-  const updated = await db.media.update({
-    where: { id: mediaId },
-    data: { storageDriver: fresh.storageDriver, storageKey: fresh.storageKey, filename: fresh.filename, originalName: fresh.originalName, mimeType: fresh.mimeType, sizeBytes: fresh.sizeBytes, width: fresh.width, height: fresh.height, variants: fresh.variants as object, kind: fresh.kind },
+  // Release the storage key from the temporary row first (unique per driver), then move the new
+  // object's data onto the existing record so every reference to `mediaId` keeps working.
+  const updated = await withTenantTransaction(businessId, async (tx) => {
+    await tx.media.delete({ where: { id: fresh.id } });
+    return tx.media.update({
+      where: { id: mediaId },
+      data: { storageDriver: fresh.storageDriver, storageKey: fresh.storageKey, filename: fresh.filename, originalName: fresh.originalName, mimeType: fresh.mimeType, sizeBytes: fresh.sizeBytes, width: fresh.width, height: fresh.height, variants: fresh.variants as object, kind: fresh.kind },
+    });
   });
-  await db.media.delete({ where: { id: fresh.id } });
   await deleteObjects(existing);
   return updated;
 }

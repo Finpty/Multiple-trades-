@@ -431,10 +431,4 @@ export async function findMediaUsage(db: DbClient, businessId: string, mediaId: 
   return out;
 }
 
-export function formatBytes(bytes: number): string {
-  if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const v = bytes / 1024 ** i;
-  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
-}
+export { formatBytes } from "./format";

@@ -150,7 +150,7 @@ export async function transformMedia(businessId: string, mediaId: string, ops: {
   return replaceMediaFile(businessId, mediaId, out, media.mimeType, media.originalName, actorUserId);
 }
 
-async function deleteObjects(media: Pick<Media, "storageDriver" | "storageKey" | "variants">) {
+export async function deleteObjects(media: Pick<Media, "storageDriver" | "storageKey" | "variants">) {
   const storage = await getStorage(media.storageDriver);
   await storage.delete(media.storageKey).catch(() => undefined);
   for (const v of Object.values((media.variants ?? {}) as Record<string, { key: string }>)) await storage.delete(v.key).catch(() => undefined);
@@ -161,6 +161,28 @@ export async function deleteMedia(businessId: string, mediaId: string, actorUser
   const db = tenantDb(businessId);
   await db.media.update({ where: { id: mediaId }, data: { deletedAt: new Date() } });
   await recordAudit({ actorUserId, businessId, action: "media.deleted", entityType: "media", entityId: mediaId });
+}
+
+/** Undo a soft delete. */
+export async function restoreMedia(businessId: string, mediaId: string, actorUserId: string | null): Promise<Media> {
+  const db = tenantDb(businessId);
+  const row = await db.media.findFirst({ where: { id: mediaId, businessId, deletedAt: { not: null } } });
+  if (!row) throw new MediaError("File is not in the trash.");
+  const media = await db.media.update({ where: { id: mediaId }, data: { deletedAt: null } });
+  await recordAudit({ actorUserId, businessId, action: "media.restored", entityType: "media", entityId: mediaId });
+  return media;
+}
+
+/** Permanently removes trashed media rows (and their objects) by id. Only rows already in the trash are purged. */
+export async function purgeMediaByIds(businessId: string, mediaIds: string[]): Promise<number> {
+  if (!mediaIds.length) return 0;
+  const db = tenantDb(businessId);
+  const rows = await db.media.findMany({ where: { businessId, id: { in: mediaIds }, deletedAt: { not: null } } });
+  for (const m of rows) {
+    await deleteObjects(m);
+    await db.media.delete({ where: { id: m.id } });
+  }
+  return rows.length;
 }
 
 export async function purgeDeletedMedia(businessId: string, olderThanDays = 30): Promise<number> {

@@ -2,11 +2,17 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireBusinessAccess, AuthorizationError } from "@/lib/authz";
 import { assertSameOrigin, CsrfError } from "@/lib/auth/csrf";
 import { MediaError, mediaUrls, uploadMedia } from "@/lib/media/service";
+import { MEDIA_SORTS, listLibraryMedia, type MediaSort } from "@/lib/media/library";
 import { isUuid } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
 
-/** GET /api/admin/:businessId/media?kind=IMAGE&q=&folderId=&page=1 — list media for pickers. */
+/**
+ * GET /api/admin/:businessId/media — list media for pickers and the library.
+ * Query: kind=IMAGE|VIDEO|DOCUMENT|OTHER, q=, folderId=<uuid>|root (unfiled; omit = every folder),
+ * tag=, sort=newest|oldest|name|size, trashed=1, page=, pageSize= (≤200, default 48).
+ * Soft-deleted files are excluded unless trashed=1.
+ */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ businessId: string }> }) {
   const { businessId } = await params;
   if (!isUuid(businessId)) return NextResponse.json({ error: "Invalid business" }, { status: 400 });
@@ -14,22 +20,19 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const ctx = await requireBusinessAccess(businessId, "media.manage", { throwOnly: true });
     const sp = request.nextUrl.searchParams;
     const kind = sp.get("kind");
-    const q = sp.get("q")?.trim();
-    const folderId = sp.get("folderId");
-    const page = Math.max(1, Number(sp.get("page") ?? 1));
-    const take = 48;
-    const where = {
-      businessId,
-      ...(kind && ["IMAGE", "VIDEO", "DOCUMENT", "OTHER"].includes(kind) ? { kind: kind as "IMAGE" } : {}),
-      ...(folderId ? { folderId } : {}),
-      ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { originalName: { contains: q, mode: "insensitive" as const } }, { altText: { contains: q, mode: "insensitive" as const } }] } : {}),
-    };
-    const [rows, total] = await Promise.all([
-      ctx.db.media.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * take, take }),
-      ctx.db.media.count({ where }),
-    ]);
-    const items = await Promise.all(rows.map(async (m) => ({ ...(await mediaUrls(m)), title: m.title, originalName: m.originalName, createdAt: m.createdAt, sizeBytes: Number(m.sizeBytes), folderId: m.folderId, tags: m.tags, caption: m.caption })));
-    return NextResponse.json({ items, total, page, pageSize: take });
+    const folderParam = sp.get("folderId");
+    const sortParam = sp.get("sort");
+    const result = await listLibraryMedia(ctx.db, businessId, {
+      kind: kind && ["IMAGE", "VIDEO", "DOCUMENT", "OTHER"].includes(kind) ? (kind as "IMAGE") : null,
+      q: sp.get("q")?.trim(),
+      folderId: folderParam === "root" ? null : folderParam && isUuid(folderParam) ? folderParam : undefined,
+      tag: sp.get("tag")?.trim() || null,
+      sort: MEDIA_SORTS.includes(sortParam as MediaSort) ? (sortParam as MediaSort) : "newest",
+      trashed: sp.get("trashed") === "1",
+      page: Math.max(1, Number(sp.get("page") ?? 1)),
+      pageSize: Math.min(200, Math.max(1, Number(sp.get("pageSize") ?? 48))),
+    });
+    return NextResponse.json(result);
   } catch (error) {
     if (error instanceof AuthorizationError) return NextResponse.json({ error: error.message }, { status: error.status });
     throw error;
